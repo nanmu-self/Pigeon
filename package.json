@@ -1,0 +1,15 @@
+{
+  "name": "pigeon",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev:desktop": "pnpm --filter desktop dev",
+    "dev:server": "pnpm --filter server dev",
+    "build": "pnpm --filter \"@mono/*\" build",
+    "check:types": "pnpm --filter \"@mono/*\" check:types"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "@pigeon/shared-types",
+  "version": "1.0.0",
+  "private": true,
+  "types": "index.ts",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "check:types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  }
+}

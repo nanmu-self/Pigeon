@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/*",
+  "apps/desktop/src-tauri",
+]
+exclude = ["apps/*/node_modules"]

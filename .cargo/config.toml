@@ -1,0 +1,17 @@
+[build]
+jobs = 4
+incremental = true
+
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+
+[net]
+retry = 3
+timeout = 30
+
+[env]
+CARGO_TERM_VERBOSE = false
+RUST_BACKTRACE = "1"

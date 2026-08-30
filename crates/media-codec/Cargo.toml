@@ -1,0 +1,9 @@
+[package]
+name = "media-codec"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+thiserror = "1"
+bytes = "1"
+tracing = "0.1"
