@@ -3,10 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev:desktop": "pnpm --filter desktop dev",
-    "dev:server": "pnpm --filter server dev",
-    "build": "pnpm --filter \"@mono/*\" build",
-    "check:types": "pnpm --filter \"@mono/*\" check:types"
+    "dev": "concurrently -n DESKTOP,SERVER -c blue,green \"pnpm dev:desktop\" \"pnpm dev:server\"",
+    "dev:desktop": "pnpm --filter @pigeon/desktop tauri dev",
+    "dev:server": "pnpm --filter @pigeon/server start:dev",
+    "tauri": "pnpm --filter @pigeon/desktop tauri",
+    "build": "pnpm --filter @pigeon/desktop build && pnpm --filter @pigeon/server build",
+    "check:types": "pnpm --filter @pigeon/desktop check && pnpm --filter @pigeon/server build",
+    "test": "pnpm --filter @pigeon/server test"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0"
   },
   "engines": {
     "node": ">=18.0.0",
