@@ -5,7 +5,7 @@
 <script lang="ts">
   import { cn } from "$lib/utils";
   import { onMount } from "svelte";
-  import Search from "lucide-svelte/icons/search";
+  import Search from "@lucide/svelte/icons/search";
 
   interface CommandItem {
     id: string;
