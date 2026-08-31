@@ -294,6 +294,16 @@ describe('聊天链路 (e2e)', () => {
     const restRead = await api.post(`/sessions/${sessionId}/read`).auth(bob.token, { type: 'bearer' });
     expect((restRead.body as MessageReadAck).conversationId).toBe(sessionId);
 
+    // lastReadAt 锚点已更新到 bob 所属一侧
+    const sessRow = (await prisma.orm.public.Session.first({ id: Number(sessionId) })) as {
+      userAId: number;
+      userBId: number;
+      lastReadAtA: string | null;
+      lastReadAtB: string | null;
+    } | null;
+    const bobLastRead = sessRow!.userAId === bob.user.id ? sessRow!.lastReadAtA : sessRow!.lastReadAtB;
+    expect(bobLastRead).not.toBeNull();
+
     await socketAlice.disconnect();
     await socketBob.disconnect();
   });

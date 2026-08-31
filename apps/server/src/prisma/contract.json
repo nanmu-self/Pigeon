@@ -517,6 +517,20 @@
                   "kind": "scalar"
                 }
               },
+              "lastReadAtA": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "kind": "scalar"
+                }
+              },
+              "lastReadAtB": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "kind": "scalar"
+                }
+              },
               "userAId": {
                 "nullable": false,
                 "type": {
@@ -607,6 +621,12 @@
                 },
                 "lastMessageId": {
                   "column": "lastMessageId"
+                },
+                "lastReadAtA": {
+                  "column": "lastReadAtA"
+                },
+                "lastReadAtB": {
+                  "column": "lastReadAtB"
                 },
                 "userAId": {
                   "column": "userAId"
@@ -1243,6 +1263,16 @@
                   "nativeType": "int4",
                   "nullable": true
                 },
+                "lastReadAtA": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "nativeType": "timestamptz",
+                  "nullable": true
+                },
+                "lastReadAtB": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "nativeType": "timestamptz",
+                  "nullable": true
+                },
                 "userAId": {
                   "codecId": "pg/int4@1",
                   "nativeType": "int4",
@@ -1431,7 +1461,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "5c8716a46931f99c0beacedc99c351d7e0e0bd3f55c7f664a1b19aaa8febdf12"
+    "storageHash": "5c60987d50c4b3b9ad489f653b8ea0bad5cbecc2885cb18158fbd64033b6b746"
   },
   "execution": {
     "executionHash": "410b14ad278f3c4f2ef1b7e0e449ed69d4d5505a49d36e38af1c0be620f3c1f5",

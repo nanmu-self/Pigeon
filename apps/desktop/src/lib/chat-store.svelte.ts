@@ -213,15 +213,21 @@ export class ChatStore {
 
   // ── 已读 ─────────────────────────────────────────────────
 
-  /** 打开会话 / 收到新消息时调用：本地未读清零 + 服务端推回执给对端 */
+  /** 打开会话 / 收到新消息时调用：本地未读清零 + 服务端推回执给对端。
+   *  WS 不可用时降级走 REST（否则红点清不掉）。 */
   async markCurrentRead(): Promise<void> {
-    if (!this.current || !this.localConversation) return;
+    const current = this.current;
+    if (!current || !this.localConversation) return;
     await chatApi.markRead(this.localConversation.id);
     // 服务端未读数清零（本地乐观更新，失败下次拉取会纠正）
     this.sessions = this.sessions.map((s) =>
-      s.id === this.current?.id ? { ...s, unreadCount: 0 } : s,
+      s.id === current.id ? { ...s, unreadCount: 0 } : s,
     );
-    await ws.markRead(this.current.id).catch(() => {});
+    try {
+      await ws.markRead(current.id);
+    } catch {
+      await sessionsApi.markRead(current.id).catch(() => {});
+    }
   }
 
   // ── WS 事件处理 ──────────────────────────────────────────

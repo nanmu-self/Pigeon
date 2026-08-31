@@ -34,6 +34,11 @@ model Session {
   /// 会话列表按它倒序排
   lastMessageAt TimestamptzString @default(now())
 
+  /// 双方各自的最后已读时间（markRead 时更新所属一侧）：
+  /// 服务端判未读/多端同步的锚点，配合 lastMessageAt 可判「有无新消息」
+  lastReadAtA TimestamptzString?
+  lastReadAtB TimestamptzString?
+
   createdAt TimestamptzString @default(now())
 
   userA User @relation("SessionUserA", fields: [userAId], references: [id])

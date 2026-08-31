@@ -185,8 +185,8 @@
                   {session.lastMessage?.content ?? "开始聊天吧"}
                 </p>
                 {#if session.unreadCount > 0}
-                  <span class="ml-2 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--p-primary)] text-xs font-medium text-[var(--p-primary-fg)]">
-                    {session.unreadCount}
+                  <span class="ml-2 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-semibold text-white">
+                    {session.unreadCount > 99 ? '99+' : session.unreadCount}
                   </span>
                 {/if}
               </div>

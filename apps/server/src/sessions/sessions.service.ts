@@ -301,6 +301,11 @@ export class SessionsService {
       .where({ sessionId, userId: meId, readAt: null })
       .updateAll({ readAt, deliveredAt: readAt });
 
+    // 本端已读锚点只推进所属一侧（配合 lastMessageAt 可判「有无新消息」）
+    await this.prisma.orm.public.Session.where({ id: sessionId }).update(
+      session.userAId === meId ? { lastReadAtA: readAt } : { lastReadAtB: readAt },
+    );
+
     // 已读水位 = 会话最新一条消息（fan-out 保证每条消息我都有回实行）
     const latest = (await this.prisma.orm.public.Message
       .where({ sessionId })
