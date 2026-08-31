@@ -101,6 +101,10 @@ export const chatApi = {
   ensureConversation: (serverSessionId: string, peerId: string, peerName: string) =>
     invoke<Conversation>("ensure_conversation", { serverSessionId, peerId, peerName }),
 
+  /** 确保存在与服务端群会话关联的本地会话（无则创建，幂等） */
+  ensureGroupConversation: (serverSessionId: string, groupName: string) =>
+    invoke<Conversation>("ensure_group_conversation", { serverSessionId, groupName }),
+
   getMessages: (
     conversationId: number,
     limit?: number,

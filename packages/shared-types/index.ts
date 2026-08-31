@@ -184,6 +184,8 @@ export interface WsChatMessage {
   replyTo?: MessageReplySummary | null;
   /** 表情回应聚合（历史下发携带；实时变化走 reaction:update） */
   reactions?: MessageReactionSummary[];
+  /** @提及的成员 id 列表（群聊；含 "all" 表示 @全员） */
+  mentions?: string[];
   /** 撤回时间（Unix 毫秒；撤回消息 content 已清空，UI 渲染撤回占位） */
   recalledAt?: number | null;
   /** Unix 毫秒时间戳 */
@@ -240,11 +242,40 @@ export interface CreateSessionInput {
   peerId: number;
 }
 
-/** 会话列表项：对端资料 + 在线状态 + 最后一条消息 + 未读数 */
+/** 群成员（成员列表展示：资料 + 角色 + 在线状态） */
+export interface GroupMemberItem {
+  user: PublicUser;
+  role: 'owner' | 'admin' | 'member';
+  joinedAt: string;
+  online: boolean;
+}
+
+/** 群详情（群设置面板用） */
+export interface GroupDetail {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  announcement?: string;
+  announcementAt?: string;
+  announcementBy?: string;
+  muteAll: boolean;
+  myRole: 'owner' | 'admin' | 'member';
+  members: GroupMemberItem[];
+  createdAt: string;
+}
+
+/** 会话列表项：单聊（peer）/群聊（name/memberCount）二态 + 最后一条消息 + 未读数 */
 export interface SessionSummary {
   id: string;
-  peer: PublicUser;
-  peerOnline: boolean;
+  kind: 'direct' | 'group';
+  /** 单聊：对端资料 */
+  peer?: PublicUser;
+  peerOnline?: boolean;
+  /** 群聊：群名称 / 成员数 / 我的角色 / 全员禁言 */
+  name?: string;
+  memberCount?: number;
+  myRole?: 'owner' | 'admin' | 'member';
+  muteAll?: boolean;
   /** 最后一条消息（会话尚无消息时不出现） */
   lastMessage?: WsChatMessage;
   /** 会话活跃时间（服务端时间戳字符串，列表按它倒序） */
@@ -252,6 +283,32 @@ export interface SessionSummary {
   /** 当前用户在该会话的未读数 */
   unreadCount: number;
   createdAt: string;
+}
+
+/** POST /groups 入参：建群（创建者为群主，memberIds 为初始成员） */
+export interface CreateGroupInput {
+  name: string;
+  /** 初始成员（须是创建者的好友） */
+  memberIds: number[];
+}
+
+/** 群管理入参 */
+export interface InviteMembersInput {
+  /** 邀请的成员（须是操作者的好友） */
+  userIds: number[];
+}
+export interface TransferOwnerInput {
+  toUserId: number;
+}
+export interface UpdateGroupInput {
+  name?: string;
+  avatarUrl?: string;
+}
+export interface UpdateAnnouncementInput {
+  content: string;
+}
+export interface UpdateMuteInput {
+  muteAll: boolean;
 }
 
 /** GET /sessions/:id/messages 响应：一页历史消息（按时间正序返回） */
@@ -340,6 +397,8 @@ export interface ServerToClientEvents {
   'message:delivered': (payload: WsDeliveredReceipt) => void;
   'reaction:update': (payload: WsReactionUpdate) => void;
   'message:recalled': (payload: WsRecalledNotice) => void;
+  /** 群信息变更（改名/公告/禁言/成员变动）→ 客户端拉取刷新 */
+  'group:updated': (payload: { conversationId: string }) => void;
   'typing:update': (payload: WsTypingState) => void;
   'presence:update': (payload: WsPresenceState) => void;
   'friend:request': (payload: WsFriendRequest) => void;
@@ -367,6 +426,8 @@ export interface ClientToServerEvents {
       meta?: Record<string, unknown>;
       /** 引用回复：被引用消息的 id（必须同会话） */
       replyToId?: string;
+      /** @提及的成员 id 列表（群聊，服务端校验均为成员） */
+      mentions?: string[];
     },
     ack: WsAckCallback<WsChatMessage>,
   ) => void;

@@ -16,17 +16,31 @@ model User {
   messages Message[]
 }
 
-/// 单聊会话：两个用户之间的会话记录。
+/// 会话：单聊（v1 起）与群聊（kind = group）。
 ///
-/// 约定 userAId < userBId（服务层写入前按 id 归一化），配合
-/// @@unique([userAId, userBId]) 保证一对用户至多一个会话；
-/// 建会话用「查不到就插入」的幂等写法，插入冲突即返回既有会话。
+/// 单聊：userAId/userBId 归一化（服务层归一化，小 id 在 A），
+/// @@unique 保证一对用户至多一个会话；对端资料由 userA/userB 取。
+/// 群聊：userAId/userBId 为空，成员与角色在 SessionMember 表，群名称/公告在本表。
 model Session {
   id Int @id @default(autoincrement())
 
-  /// 会话双方（归一化后小 id 为 A，大 id 为 B）
-  userAId Int
-  userBId Int
+  /// direct = 单聊；group = 群聊
+  kind SessionKind @default(direct)
+  /// 群名称（direct 为空）；仅群主/管理员可改
+  name String?
+  /// 群头像外链（七牛 dir=avatar）
+  avatarUrl String?
+  /// 群公告（仅群主/管理员可发布）
+  announcement String?
+  /// 公告更新时间/发布者
+  announcementAt TimestamptzString?
+  announcementById Int?
+  /// 全员禁言：开启后仅群主/管理员可发言
+  muteAll Boolean @default(false)
+
+  /// 单聊双方（归一化后小 id 为 A，大 id 为 B；群聊为空）
+  userAId Int?
+  userBId Int?
 
   /// 最后一条消息的冗余指针：会话列表一次 include 带出预览，免逐会话子查询
   lastMessageId Int?
@@ -41,18 +55,52 @@ model Session {
 
   createdAt TimestamptzString @default(now())
 
-  userA User @relation("SessionUserA", fields: [userAId], references: [id])
-  userB User @relation("SessionUserB", fields: [userBId], references: [id])
+  userA User? @relation("SessionUserA", fields: [userAId], references: [id])
+  userB User? @relation("SessionUserB", fields: [userBId], references: [id])
   /// 循环外键：Message.sessionId → Session，Session.lastMessageId → Message；
   /// SetNull：删消息时自动清会话指针，否则两把 Restrict 锁死，消息永远删不掉
   lastMessage Message? @relation(fields: [lastMessageId], references: [id], onDelete: SetNull)
 
   messages Message[]
 
-  /// 一对用户至多一个会话（前缀 userAId 同时服务「我作为 A」的查询）
+  /// 一对用户至多一个单聊会话（前缀 userAId 同时服务「我作为 A」的查询；
+  /// 群聊行两列为 NULL，PG 唯一索引不约束 NULL）
   @@unique([userAId, userBId])
   /// 「我作为 B」的会话列表查询走此索引（与上面的复合唯一索引组成 OR 两臂）
   @@index([userBId])
+
+  /// 群成员（direct 会话不建成员行，成员关系由 userAId/userBId 表达）
+  members SessionMember[]
+}
+
+/// 会话类型
+enum SessionKind {
+  direct
+  group
+}
+
+/// 群成员角色：群主 / 管理员 / 普通成员
+enum SessionRole {
+  owner
+  admin
+  member
+}
+
+/// 群成员关系（仅群聊会话）：成员 + 角色 + 个人已读锚点。
+/// 复合主键 (sessionId, userId) 天然防重。
+model SessionMember {
+  sessionId Int
+  userId    Int
+  role      SessionRole @default(member)
+  joinedAt  TimestamptzString @default(now())
+  /// 成员自己的最后已读时间（markRead 更新；群聊的已读锚点）
+  lastReadAt TimestamptzString?
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@id([sessionId, userId])
+  @@index([userId])
 }
 
 /// 消息：会话内的消息内容。
@@ -79,6 +127,9 @@ model Message {
   /// 引用回复：被引用消息 id（必须同会话，服务层校验）；
   /// 被引用消息被删时置空（SetNull）
   replyToId Int?
+
+  /// @提及的成员 id 列表（群聊；服务层校验均为会话成员，JSON 数组）
+  mentions Json?
 
   /// 撤回时间（NULL = 未撤回）；撤回时清空 content/meta，
   /// 行保留（排序/同步锚点不破坏）

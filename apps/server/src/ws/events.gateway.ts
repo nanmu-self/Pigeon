@@ -208,10 +208,12 @@ export class EventsGateway
       clientMsgId?: string;
       meta?: Record<string, unknown>;
       replyToId?: string;
+      /** @提及的成员 id 列表（群聊） */
+      mentions?: string[];
     },
     ack?: Ack<WsChatMessage>,
   ): Promise<void> {
-    const { conversationId, content, kind, clientMsgId, meta, replyToId } = payload;
+    const { conversationId, content, kind, clientMsgId, meta, replyToId, mentions } = payload;
     if (!conversationId || !content?.trim()) {
       ack?.({ ok: false, error: 'conversationId and content are required' });
       return;
@@ -250,6 +252,7 @@ export class EventsGateway
         ...(clientMsgId ? { clientMsgId } : {}),
         ...(meta ? { meta } : {}),
         ...(replyToIdNum !== undefined ? { replyToId: replyToIdNum } : {}),
+        ...(mentions?.length ? { mentions } : {}),
       });
       // 先 ack（发送方获得回执）；message:new 由服务层推给双方所有设备
       ack?.({ ok: true, data: message });

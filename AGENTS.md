@@ -22,10 +22,11 @@ Pigeon（鸽子）— 端到端加密即时通讯（IM）应用，monorepo：**T
 | `apps/server/src/auth/` | 注册/登录：`auth.controller.ts`（`POST /auth/register`、`POST /auth/login`）、`auth.service.ts`（bcryptjs cost 10 + JWT 签发）、`jwt-auth.guard.ts`（可复用 HTTP JWT 守卫，验证 `Authorization: Bearer` 后把 payload 挂到 `request.user`）、`dto.ts` |
 | `apps/server/src/storage/` | **七牛直传取票**：`qiniu.service.ts`（HMAC-SHA1 签上传凭证、`DIR_LIMITS` 目录限制、`makeKey()` 生成 key）、`storage.controller.ts`（`POST /storage/upload-token`，JwtAuthGuard 保护）、`config.ts`（`QINIU_*` 环境变量解析，未配置时接口 503）、`qiniu.service.spec.ts`（签名算法单测） |
 | `apps/server/src/users/` | 用户资料与搜索：`users.controller.ts`（`GET/PATCH /users/me`、`GET /users/search?q=`，JwtAuthGuard 保护）、`users.service.ts`（部分更新空入参 400；搜索 = 邮箱精确 + 昵称内存过滤，扫描上限 `SEARCH_SCAN_LIMIT`，量大后换 raw ILIKE）、`user.mapper.ts`（`UserRow` → `PublicUser` 共享映射，auth/friends/sessions 也复用）、`dto.ts`、`users.service.spec.ts` |
+| `apps/server/src/groups/` | 群聊：建群/邀请/踢出/转让/退群/公告/禁言/成员列表；角色矩阵见 `groups.service.ts` 顶部注释；成员变动落 system 消息 + `group:updated` 广播；`groups.e2e-spec.ts` 全流程覆盖 |
 | `apps/server/src/friends/` | 好友关系（状态机见 `friends.service.ts` 顶部注释）：申请/通过/拒绝/删除/拉黑/解除拉黑；REST `GET /friends`（含在线状态）、`GET /friends/requests`、`POST /friends/requests`、`POST /friends/requests/:id/accept|decline`、`DELETE /friends/:userId`、`POST /friends/:userId/block|unblock`；`assertFriends()` 是发消息/建会话的共享闸门（SessionsService 复用） |
 | `apps/server/src/sessions/` | 会话与消息：`sessions.service.ts`（好友间幂等建会话、发消息事务【消息 + 接收者回实行（含送达）+ 会话活跃指针】、keyset 游标历史分页 + 对端已读/送达水位、WS 推回执）、`sessions.controller.ts`（`GET/POST /sessions`、`GET /sessions/:id/messages?cursor&limit`、`POST /sessions/:id/read`）、`sessions.mapper.ts`（`pgTimestampToMs` 等，有单测）、`dto.ts` |
 | `apps/server/src/ws/` | `events.gateway.ts` — Socket.IO 网关：JWT 握手验签、房间 `user:{userId}` / `conversation:{convId}`、事件 ack；`message:send` 经 SessionsService 事务落库后推双方 user 房间，`message:read` 标记已读并推回执；`ws-events.service.ts` — 全局推送桥 + **presence 注册表**（`markOnline/markOffline/isOnline`，REST 侧据此返回在线状态） |
-| `apps/server/src/prisma/` | `prisma.service.ts` + `contract.prisma`（模型：`User`、`Session` 单聊会话【userAId<userBId 归一化 + 复合唯一 + 双方 lastReadAt 锚点】、`Message`【自增游标 + clientMsgId 幂等 + replyToId 引用】、`Friendship` 状态机、`MessageStatus` 回实行【复合主键 + 送达/已读】、`MessageReaction` 表情回应【messageId+userId+emoji 复合主键，幂等】） |
+| `apps/server/src/prisma/` | `prisma.service.ts` + `contract.prisma`（模型：`User`、`Session` 会话【kind=direct/group；单聊 userAId<userBId 归一化复合唯一；群聊 name/公告/禁言，成员在 SessionMember】、`Message`【自增游标 + clientMsgId 幂等 + replyToId 引用 + mentions】、`Friendship` 状态机、`MessageStatus` 回实行【复合主键 + 送达/已读】、`MessageReaction` 表情回应【复合主键，幂等】、`SessionMember` 群成员【复合主键 + role/lastReadAt】） |
 | `apps/server/src/config.ts` | `allowedOrigins()` — HTTP CORS 与 Socket.IO CORS 共用白名单，覆盖 Tauri 各平台 origin |
 | `apps/server/src/main.ts` | 入口，`dotenv/config`，默认端口 **3048** |
 | `packages/shared-types` | `@pigeon/shared-types` — 前后端共享类型：`User`、`Message`、`ApiResponse`、`MessageType`、上传契约（`UploadDir` / `UploadTokenInput` / `UploadTicket`），以及**类型化 Socket.IO 事件契约**（`ClientToServerEvents` / `ServerToClientEvents` / `WsAck<T>` / `SocketData`） |
@@ -170,4 +171,5 @@ Rust 侧（Tauri invoke）：
 - ✅ 图片/文件消息（七牛 dir=chat 直传 + meta 透传）、引用回复（replyToId + 内嵌摘要）、表情回应（reaction:add/remove + reaction:update 增量广播）
 - 🚧 E2EE 接入消息链路（密钥交换协议）；通讯录页接通好友接口
 - ✅ 消息撤回（2 分钟窗口、仅发送者，REST + message:recalled 广播，撤回即清空 content/meta）
+- ✅ 群聊：建群/群消息（createAll 批量 fan-out，离线成员未读落库）/群历史/@提及（mentions + @我通知）/公告/全员禁言/邀请/踢出/转让群主/退群/成员列表（含在线状态）—— 角色权限矩阵 + system 消息 —— e2e 覆盖（`test/group.e2e-spec.ts`）
 - ⬜ 离线同步、群聊、消息搜索、多设备漫游

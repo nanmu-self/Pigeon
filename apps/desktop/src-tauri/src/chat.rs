@@ -132,6 +132,34 @@ pub fn ensure_conversation(
     })
 }
 
+/// 确保存在与服务端群会话关联的本地会话（无则创建，幂等）
+pub fn ensure_group_conversation(
+    conn: &Connection,
+    server_session_id: &str,
+    group_name: &str,
+) -> Result<Conversation, rusqlite::Error> {
+    if let Some(existing) = find_conversation_by_session(conn, server_session_id)? {
+        return Ok(existing);
+    }
+    let now = now_ms();
+    conn.execute(
+        "INSERT INTO conversations (kind, name, peer_id, server_session_id, created_at, updated_at)
+         VALUES (?1, ?2, NULL, ?3, ?4, ?4)",
+        params![KIND_GROUP, group_name, server_session_id, now],
+    )?;
+    Ok(Conversation {
+        id: conn.last_insert_rowid(),
+        kind: KIND_GROUP.to_string(),
+        name: group_name.to_string(),
+        peer_id: None,
+        server_session_id: Some(server_session_id.to_string()),
+        peer_read_msg_id: None,
+        peer_delivered_msg_id: None,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
 fn map_conversation(row: &rusqlite::Row<'_>) -> rusqlite::Result<Conversation> {
     Ok(Conversation {
         id: row.get(0)?,

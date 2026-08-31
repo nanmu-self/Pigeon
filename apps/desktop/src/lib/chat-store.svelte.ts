@@ -18,6 +18,7 @@
  */
 import type {
   FriendItem,
+  GroupDetail,
   MessageReactionSummary,
   SessionSummary,
   WsChatMessage,
@@ -35,8 +36,10 @@ import {
   type MessageKind,
 } from '$lib/chat';
 import { sessionsApi } from '$lib/api/sessions';
+import { groupsApi } from '$lib/api/groups';
 import { friendsApi } from '$lib/api/friends';
 import { ws } from '$lib/api/socket.svelte';
+import { showToast } from '$lib/toast';
 import { uploadToQiniu, isUploadCanceled } from '$lib/upload/qiniu';
 
 /** 每次从服务端拉取的历史页大小 */
@@ -65,6 +68,17 @@ export class ChatStore {
   uploadProgress = $state<{ fname: string; percent: number } | null>(null);
   /** 正在回复的消息（输入区上方预览条；null = 非回复） */
   replyTo = $state<ChatMessage | null>(null);
+  /** 群详情（打开群会话时异步加载；成员列表/公告/禁言/管理操作用） */
+  groupDetail = $state<GroupDetail | null>(null);
+  groupDetailLoading = $state(false);
+  /** 正在编写的消息里 @ 的成员 id（发送后清空） */
+  pendingMentions = $state<string[]>([]);
+  /**
+   * 当次运行中「@了我」的消息 id（serverMsgId）。
+   * 仅内存记录：本地缓存不含 mentions（避免再扩列），
+   * 历史回读时不显示 @我 徽章，正文里的 @昵称 文本本身可见。
+   */
+  liveMentionedIds = $state<string[]>([]);
 
   /** 我在服务端的用户 id（WS 握手分配；表情回应高亮判断用） */
   get myUserId(): string {
@@ -82,6 +96,7 @@ export class ChatStore {
     ws.on('message:delivered', (r) => void this.onDeliveredReceipt(r));
     ws.on('reaction:update', (r) => this.onReactionUpdate(r));
     ws.on('message:recalled', (r) => void this.onRecalled(r));
+    ws.on('group:updated', (r) => void this.onGroupUpdated(r));
     ws.on('presence:update', (p) => this.onPresence(p.userId, p.online));
   }
 
@@ -138,21 +153,79 @@ export class ChatStore {
     this.messages = [];
     this.hasMoreHistory = false;
     this.oldestFetchedServerId = null;
+    this.replyTo = null;
+    this.pendingMentions = [];
+    this.groupDetail = null;
 
-    // 1. 本地会话（幂等创建）+ 立即渲染本地已有消息
-    this.localConversation = await chatApi.ensureConversation(
-      session.id,
-      String(session.peer.id),
-      session.peer.nickname,
-    );
+    // 1. 本地会话（单聊/群聊分路径，幂等创建）+ 立即渲染本地已有消息
+    this.localConversation =
+      session.kind === 'group'
+        ? await chatApi.ensureGroupConversation(session.id, session.name ?? '群聊')
+        : await chatApi.ensureConversation(
+            session.id,
+            String(session.peer!.id),
+            session.peer!.nickname,
+          );
     this.messages = await chatApi.getMessages(this.localConversation.id, HISTORY_PAGE_SIZE);
 
-    // 2. 异步拉服务端最新一页合并
+    // 2. 异步拉服务端最新一页合并；群聊顺带拉群详情
     await this.syncLatest();
+    if (session.kind === 'group') void this.loadGroupDetail(session.id);
 
-    // 3. 标记已读（本地未读清零 + 服务端推回执给对端）
+    // 3. 标记已读（本地未读清零 + 服务端推回执）
     await this.markCurrentRead();
   }
+
+  /** 群详情（成员列表/公告/禁言状态） */
+  async loadGroupDetail(groupId: string): Promise<void> {
+    this.groupDetailLoading = true;
+    try {
+      this.groupDetail = await groupsApi.detail(groupId);
+    } finally {
+      this.groupDetailLoading = false;
+    }
+  }
+
+  /** 建群（创建者为群主）→ 刷新列表并打开 */
+  async createGroup(name: string, memberIds: number[]): Promise<void> {
+    const session = await groupsApi.create({ name, memberIds });
+    await this.loadSessions();
+    await this.openSession(session);
+  }
+
+  /** 群管理操作统一入口：调 REST → 刷新群详情 + 会话列表 */
+  private async groupAction(action: () => Promise<unknown>, groupId: string): Promise<void> {
+    try {
+      await action();
+      await this.loadGroupDetail(groupId);
+      await this.loadSessions();
+      this.error = null;
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  inviteMembers = (groupId: string, userIds: number[]) =>
+    this.groupAction(() => groupsApi.invite(groupId, userIds), groupId);
+  kickMember = (groupId: string, userId: number) =>
+    this.groupAction(() => groupsApi.kick(groupId, userId), groupId);
+  transferOwner = (groupId: string, toUserId: number) =>
+    this.groupAction(() => groupsApi.transferOwner(groupId, toUserId), groupId);
+  renameGroup = (groupId: string, name: string) =>
+    this.groupAction(() => groupsApi.updateProfile(groupId, { name }), groupId);
+  setGroupAvatar = (groupId: string, avatarUrl: string) =>
+    this.groupAction(() => groupsApi.updateProfile(groupId, { avatarUrl }), groupId);
+  setAnnouncement = (groupId: string, content: string) =>
+    this.groupAction(() => groupsApi.setAnnouncement(groupId, content), groupId);
+  setMuteAll = (groupId: string, muteAll: boolean) =>
+    this.groupAction(() => groupsApi.setMuteAll(groupId, muteAll), groupId);
+  leaveGroup = async (groupId: string): Promise<void> => {
+    await groupsApi.leave(groupId);
+    this.current = null;
+    this.messages = [];
+    this.groupDetail = null;
+    await this.loadSessions();
+  };
 
   /** 拉取服务端最新一页并合并入库，然后重读本地 */
   private async syncLatest(): Promise<void> {
@@ -206,7 +279,7 @@ export class ChatStore {
       await chatApi.upsertServerMessage({
         conversationId: conv.id,
         serverMsgId: m.id,
-        sender: m.senderId === String(this.current?.peer.id) ? 'other' : 'self',
+        sender: m.senderId === ws.userId ? 'self' : 'other',
         senderName: m.senderName,
         kind: m.kind,
         content: m.content,
@@ -221,7 +294,7 @@ export class ChatStore {
 
   // ── 发送（optimistic → WS ack → 回填 / 失败标记） ────────
 
-  async send(content: string): Promise<void> {
+  async send(content: string, mentions?: string[]): Promise<void> {
     const text = content.trim();
     if (!text || !this.current || !this.localConversation) return;
 
@@ -233,13 +306,13 @@ export class ChatStore {
       replyToId = replyMsg.serverMsgId;
       replySummary = JSON.stringify({
         id: replyMsg.serverMsgId,
-        senderName: replyMsg.senderName || (replyMsg.sender === 'self' ? '我' : this.current.peer.nickname),
+        senderName: replyMsg.senderName || (replyMsg.sender === 'self' ? '我' : this.current.peer?.nickname ?? ''),
         kind: replyMsg.kind,
         content: replyMsg.content,
       });
     }
     this.replyTo = null;
-    await this.stageAndSend('text', text, undefined, undefined, replySummary, replyToId);
+    await this.stageAndSend('text', text, undefined, undefined, replySummary, replyToId, mentions);
   }
 
   cancelReply(): void {
@@ -375,6 +448,7 @@ export class ChatStore {
     clientMsgId: string = crypto.randomUUID(),
     replySummary?: string,
     replyToId?: string,
+    mentions?: string[],
   ): Promise<void> {
     if (!this.current || !this.localConversation) return;
     const staged = await chatApi.sendMessage(
@@ -386,7 +460,7 @@ export class ChatStore {
       replySummary,
     );
     this.messages = [...this.messages, staged];
-    await this.dispatch(clientMsgId, content, kind, meta, replyToId);
+    await this.dispatch(clientMsgId, content, kind, meta, replyToId, mentions);
   }
 
   /** WS 发送；ack 后回填服务端 id/时间 → sent；失败置 failed */
@@ -396,11 +470,12 @@ export class ChatStore {
     kind: MessageKind,
     meta?: Record<string, unknown>,
     replyToId?: string,
+    mentions?: string[],
   ): Promise<void> {
     const current = this.current;
     if (!current) return;
     try {
-      const ack = await ws.sendMessage(current.id, content, kind, clientMsgId, replyToId);
+      const ack = await ws.sendMessage(current.id, content, kind, clientMsgId, replyToId, mentions);
       const confirmed = await chatApi.acknowledgeMessage(clientMsgId, ack.id, ack.createdAt);
       this.replaceLocal(confirmed);
       this.error = null;
@@ -450,7 +525,7 @@ export class ChatStore {
   // ── WS 事件处理 ──────────────────────────────────────────
 
   private async onNewMessage(m: WsChatMessage): Promise<void> {
-    // 会话列表未加载时无法定位对端 → 先拉一次（首次推送/冷启动场景）
+    // 会话列表未加载时无法定位会话 → 先拉一次（首次推送/冷启动场景）
     let session = this.sessions.find((s) => s.id === m.conversationId);
     if (!session) {
       await this.loadSessions();
@@ -459,16 +534,19 @@ export class ChatStore {
     if (!session) return; // 列表里也没有（非本账号会话）→ 不落本地
 
     // 合并入本地 SQLite（当前会话之外的推送也落库，打开时即可本地优先渲染）
-    const isFromPeer = String(session.peer.id) === m.senderId;
-    const conv = await chatApi.ensureConversation(
-      m.conversationId,
-      String(session.peer.id),
-      session.peer.nickname,
-    );
+    const isSelf = m.senderId === ws.userId;
+    const conv =
+      session.kind === 'group'
+        ? await chatApi.ensureGroupConversation(m.conversationId, session.name ?? '群聊')
+        : await chatApi.ensureConversation(
+            m.conversationId,
+            String(session.peer!.id),
+            session.peer!.nickname,
+          );
     const { message, inserted } = await chatApi.upsertServerMessage({
       conversationId: conv.id,
       serverMsgId: m.id,
-      sender: isFromPeer ? 'other' : 'self',
+      sender: isSelf ? 'self' : 'other',
       senderName: m.senderName,
       kind: m.kind,
       content: m.content,
@@ -479,15 +557,32 @@ export class ChatStore {
       recalled: m.recalledAt !== undefined && m.recalledAt !== null,
     });
 
+    // 被 @ 了我 → 记录徽章 id；会话未打开时额外弹提示
+    const mentionsMe = m.mentions?.includes(ws.userId) ?? false;
+    if (mentionsMe) {
+      this.liveMentionedIds = [...this.liveMentionedIds, m.id];
+    }
+
     if (this.current?.id === m.conversationId) {
       if (inserted && !this.messages.some((x) => x.id === message.id)) {
         this.messages = [...this.messages, message];
       }
       // 会话正开着 → 立即回执已读
       await this.markCurrentRead();
+    } else if (mentionsMe) {
+      // 会话未打开 → 特殊通知（红点之外再弹提示）
+      showToast(`「${session.kind === 'group' ? session.name : session.peer?.nickname}」中提到了你`);
     }
     // 刷新列表（未读数/预览/排序）
     void this.loadSessions();
+  }
+
+  /** 群信息变更（成员/公告/禁言/资料）→ 刷新列表与群详情 */
+  private async onGroupUpdated(r: { conversationId: string }): Promise<void> {
+    await this.loadSessions();
+    if (this.current?.id === r.conversationId && this.groupDetail) {
+      await this.loadGroupDetail(r.conversationId);
+    }
   }
 
   private async onReadReceipt(r: WsReadReceipt): Promise<void> {
@@ -504,7 +599,7 @@ export class ChatStore {
 
   private onPresence(userId: string, online: boolean): void {
     this.sessions = this.sessions.map((s) =>
-      s.peer.id === Number(userId) ? { ...s, peerOnline: online } : s,
+      s.peer?.id === Number(userId) ? { ...s, peerOnline: online } : s,
     );
   }
 

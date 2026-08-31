@@ -14,6 +14,7 @@ export interface MessageRow {
   kind: 'text' | 'image' | 'file' | 'system';
   content: string;
   meta: unknown;
+  mentions: unknown;
   clientMsgId: string | null;
   replyToId: number | null;
   recalledAt: string | null;
@@ -23,8 +24,15 @@ export interface MessageRow {
 /** Session 表行结构（Prisma 查询返回的字段） */
 export interface SessionRow {
   id: number;
-  userAId: number;
-  userBId: number;
+  kind: 'direct' | 'group';
+  name: string | null;
+  avatarUrl: string | null;
+  announcement: string | null;
+  announcementAt: string | null;
+  announcementById: number | null;
+  muteAll: boolean;
+  userAId: number | null;
+  userBId: number | null;
   lastMessageId: number | null;
   lastMessageAt: string;
   createdAt: string;
@@ -57,6 +65,7 @@ export function toChatMessage(
     kind: row.kind,
     content: row.content,
     meta: (row.meta as Record<string, unknown> | null) ?? null,
+    mentions: (row.mentions as string[] | null) ?? undefined,
     ...(extras?.replyTo ? { replyTo: extras.replyTo } : {}),
     ...(extras?.reactions?.length ? { reactions: extras.reactions } : {}),
     ...(row.recalledAt ? { recalledAt: pgTimestampToMs(row.recalledAt) } : {}),
@@ -64,22 +73,28 @@ export function toChatMessage(
   };
 }
 
-/** 会话行 → 列表项（lastMessage/unreadCount/peer 由服务层查好后传入） */
+/** 会话行 → 列表项（peer/name/memberCount 等按会话类型由服务层传入） */
 export function toSessionSummary(
   row: SessionRow,
-  meId: number,
-  peer: PublicUser,
-  peerOnline: boolean,
-  unreadCount: number,
-  lastMessage: WsChatMessage | null,
+  opts: {
+    peer?: PublicUser;
+    peerOnline?: boolean;
+    name?: string;
+    memberCount?: number;
+    myRole?: 'owner' | 'admin' | 'member';
+    muteAll?: boolean;
+    unreadCount: number;
+    lastMessage: WsChatMessage | null;
+  },
 ): SessionSummary {
   return {
     id: String(row.id),
-    peer,
-    peerOnline,
-    unreadCount,
+    kind: row.kind,
+    ...(opts.peer ? { peer: opts.peer, peerOnline: opts.peerOnline ?? false } : {}),
+    ...(opts.name !== undefined ? { name: opts.name, memberCount: opts.memberCount, myRole: opts.myRole, muteAll: opts.muteAll } : {}),
+    unreadCount: opts.unreadCount,
     lastMessageAt: row.lastMessageAt,
     createdAt: row.createdAt,
-    ...(lastMessage ? { lastMessage } : {}),
+    ...(opts.lastMessage ? { lastMessage: opts.lastMessage } : {}),
   };
 }

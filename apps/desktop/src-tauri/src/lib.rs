@@ -30,6 +30,7 @@ pub fn run() {
             commands::delete_message,
             commands::search_messages,
             commands::ensure_conversation,
+            commands::ensure_group_conversation,
             commands::upsert_server_message,
             commands::acknowledge_message,
             commands::mark_message_failed,

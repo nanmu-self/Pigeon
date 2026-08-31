@@ -24,6 +24,10 @@
       "model": "Session",
       "namespace": "public"
     },
+    "sessionMember": {
+      "model": "SessionMember",
+      "namespace": "public"
+    },
     "user": {
       "model": "User",
       "namespace": "public"
@@ -68,6 +72,36 @@
               {
                 "name": "system",
                 "value": "system"
+              }
+            ]
+          },
+          "SessionKind": {
+            "codecId": "pg/text@1",
+            "members": [
+              {
+                "name": "direct",
+                "value": "direct"
+              },
+              {
+                "name": "group",
+                "value": "group"
+              }
+            ]
+          },
+          "SessionRole": {
+            "codecId": "pg/text@1",
+            "members": [
+              {
+                "name": "owner",
+                "value": "owner"
+              },
+              {
+                "name": "admin",
+                "value": "admin"
+              },
+              {
+                "name": "member",
+                "value": "member"
               }
             ]
           }
@@ -284,6 +318,13 @@
                   "plane": "domain"
                 }
               },
+              "mentions": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/json@1",
+                  "kind": "scalar"
+                }
+              },
               "meta": {
                 "nullable": true,
                 "type": {
@@ -428,6 +469,9 @@
                 },
                 "kind": {
                   "column": "kind"
+                },
+                "mentions": {
+                  "column": "mentions"
                 },
                 "meta": {
                   "column": "meta"
@@ -640,6 +684,34 @@
           },
           "Session": {
             "fields": {
+              "announcement": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "announcementAt": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "kind": "scalar"
+                }
+              },
+              "announcementById": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/int4@1",
+                  "kind": "scalar"
+                }
+              },
+              "avatarUrl": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
               "createdAt": {
                 "nullable": false,
                 "type": {
@@ -652,6 +724,19 @@
                 "type": {
                   "codecId": "pg/int4@1",
                   "kind": "scalar"
+                }
+              },
+              "kind": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                },
+                "valueSet": {
+                  "entityKind": "enum",
+                  "entityName": "SessionKind",
+                  "namespaceId": "public",
+                  "plane": "domain"
                 }
               },
               "lastMessageAt": {
@@ -682,15 +767,29 @@
                   "kind": "scalar"
                 }
               },
-              "userAId": {
+              "muteAll": {
                 "nullable": false,
+                "type": {
+                  "codecId": "pg/bool@1",
+                  "kind": "scalar"
+                }
+              },
+              "name": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "userAId": {
+                "nullable": true,
                 "type": {
                   "codecId": "pg/int4@1",
                   "kind": "scalar"
                 }
               },
               "userBId": {
-                "nullable": false,
+                "nullable": true,
                 "type": {
                   "codecId": "pg/int4@1",
                   "kind": "scalar"
@@ -710,6 +809,21 @@
                 },
                 "to": {
                   "model": "Message",
+                  "namespace": "public"
+                }
+              },
+              "members": {
+                "cardinality": "1:N",
+                "on": {
+                  "localFields": [
+                    "id"
+                  ],
+                  "targetFields": [
+                    "sessionId"
+                  ]
+                },
+                "to": {
+                  "model": "SessionMember",
                   "namespace": "public"
                 }
               },
@@ -761,11 +875,26 @@
             },
             "storage": {
               "fields": {
+                "announcement": {
+                  "column": "announcement"
+                },
+                "announcementAt": {
+                  "column": "announcementAt"
+                },
+                "announcementById": {
+                  "column": "announcementById"
+                },
+                "avatarUrl": {
+                  "column": "avatarUrl"
+                },
                 "createdAt": {
                   "column": "createdAt"
                 },
                 "id": {
                   "column": "id"
+                },
+                "kind": {
+                  "column": "kind"
                 },
                 "lastMessageAt": {
                   "column": "lastMessageAt"
@@ -779,6 +908,12 @@
                 "lastReadAtB": {
                   "column": "lastReadAtB"
                 },
+                "muteAll": {
+                  "column": "muteAll"
+                },
+                "name": {
+                  "column": "name"
+                },
                 "userAId": {
                   "column": "userAId"
                 },
@@ -788,6 +923,104 @@
               },
               "namespaceId": "public",
               "table": "session"
+            }
+          },
+          "SessionMember": {
+            "fields": {
+              "joinedAt": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "kind": "scalar"
+                }
+              },
+              "lastReadAt": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "kind": "scalar"
+                }
+              },
+              "role": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                },
+                "valueSet": {
+                  "entityKind": "enum",
+                  "entityName": "SessionRole",
+                  "namespaceId": "public",
+                  "plane": "domain"
+                }
+              },
+              "sessionId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/int4@1",
+                  "kind": "scalar"
+                }
+              },
+              "userId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/int4@1",
+                  "kind": "scalar"
+                }
+              }
+            },
+            "relations": {
+              "session": {
+                "cardinality": "N:1",
+                "on": {
+                  "localFields": [
+                    "sessionId"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "Session",
+                  "namespace": "public"
+                }
+              },
+              "user": {
+                "cardinality": "N:1",
+                "on": {
+                  "localFields": [
+                    "userId"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "User",
+                  "namespace": "public"
+                }
+              }
+            },
+            "storage": {
+              "fields": {
+                "joinedAt": {
+                  "column": "joinedAt"
+                },
+                "lastReadAt": {
+                  "column": "lastReadAt"
+                },
+                "role": {
+                  "column": "role"
+                },
+                "sessionId": {
+                  "column": "sessionId"
+                },
+                "userId": {
+                  "column": "userId"
+                }
+              },
+              "namespaceId": "public",
+              "table": "sessionMember"
             }
           },
           "User": {
@@ -1165,6 +1398,11 @@
                     "plane": "storage"
                   }
                 },
+                "mentions": {
+                  "codecId": "pg/json@1",
+                  "nativeType": "json",
+                  "nullable": true
+                },
                 "meta": {
                   "codecId": "pg/json@1",
                   "nativeType": "json",
@@ -1505,7 +1743,34 @@
               "uniques": []
             },
             "session": {
+              "checks": [
+                {
+                  "expression": "\"kind\" IN ('direct', 'group')",
+                  "name": "session_kind_check_bdc1f9fc",
+                  "prefix": "session_kind_check"
+                }
+              ],
               "columns": {
+                "announcement": {
+                  "codecId": "pg/text@1",
+                  "nativeType": "text",
+                  "nullable": true
+                },
+                "announcementAt": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "nativeType": "timestamptz",
+                  "nullable": true
+                },
+                "announcementById": {
+                  "codecId": "pg/int4@1",
+                  "nativeType": "int4",
+                  "nullable": true
+                },
+                "avatarUrl": {
+                  "codecId": "pg/text@1",
+                  "nativeType": "text",
+                  "nullable": true
+                },
                 "createdAt": {
                   "codecId": "pg/timestamptz-string@1",
                   "default": {
@@ -1523,6 +1788,21 @@
                   },
                   "nativeType": "int4",
                   "nullable": false
+                },
+                "kind": {
+                  "codecId": "pg/text@1",
+                  "default": {
+                    "kind": "literal",
+                    "value": "direct"
+                  },
+                  "nativeType": "text",
+                  "nullable": false,
+                  "valueSet": {
+                    "entityKind": "valueSet",
+                    "entityName": "SessionKind",
+                    "namespaceId": "public",
+                    "plane": "storage"
+                  }
                 },
                 "lastMessageAt": {
                   "codecId": "pg/timestamptz-string@1",
@@ -1548,15 +1828,29 @@
                   "nativeType": "timestamptz",
                   "nullable": true
                 },
+                "muteAll": {
+                  "codecId": "pg/bool@1",
+                  "default": {
+                    "kind": "literal",
+                    "value": false
+                  },
+                  "nativeType": "bool",
+                  "nullable": false
+                },
+                "name": {
+                  "codecId": "pg/text@1",
+                  "nativeType": "text",
+                  "nullable": true
+                },
                 "userAId": {
                   "codecId": "pg/int4@1",
                   "nativeType": "int4",
-                  "nullable": false
+                  "nullable": true
                 },
                 "userBId": {
                   "codecId": "pg/int4@1",
                   "nativeType": "int4",
-                  "nullable": false
+                  "nullable": true
                 }
               },
               "foreignKeys": [
@@ -1650,6 +1944,116 @@
                 }
               ]
             },
+            "sessionMember": {
+              "checks": [
+                {
+                  "expression": "\"role\" IN ('owner', 'admin', 'member')",
+                  "name": "sessionMember_role_check_7f9f6ca4",
+                  "prefix": "sessionMember_role_check"
+                }
+              ],
+              "columns": {
+                "joinedAt": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "default": {
+                    "expression": "now()",
+                    "kind": "function"
+                  },
+                  "nativeType": "timestamptz",
+                  "nullable": false
+                },
+                "lastReadAt": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "nativeType": "timestamptz",
+                  "nullable": true
+                },
+                "role": {
+                  "codecId": "pg/text@1",
+                  "default": {
+                    "kind": "literal",
+                    "value": "member"
+                  },
+                  "nativeType": "text",
+                  "nullable": false,
+                  "valueSet": {
+                    "entityKind": "valueSet",
+                    "entityName": "SessionRole",
+                    "namespaceId": "public",
+                    "plane": "storage"
+                  }
+                },
+                "sessionId": {
+                  "codecId": "pg/int4@1",
+                  "nativeType": "int4",
+                  "nullable": false
+                },
+                "userId": {
+                  "codecId": "pg/int4@1",
+                  "nativeType": "int4",
+                  "nullable": false
+                }
+              },
+              "foreignKeys": [
+                {
+                  "onDelete": "cascade",
+                  "source": {
+                    "columns": [
+                      "sessionId"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "sessionMember"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "session"
+                  }
+                },
+                {
+                  "source": {
+                    "columns": [
+                      "userId"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "sessionMember"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "user"
+                  }
+                }
+              ],
+              "indexes": [
+                {
+                  "columns": [
+                    "sessionId"
+                  ],
+                  "name": "sessionMember_sessionId_idx_29f415d4",
+                  "prefix": "sessionMember_sessionId_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "userId"
+                  ],
+                  "name": "sessionMember_userId_idx_a489d58a",
+                  "prefix": "sessionMember_userId_idx",
+                  "unique": false
+                }
+              ],
+              "primaryKey": {
+                "columns": [
+                  "sessionId",
+                  "userId"
+                ]
+              },
+              "uniques": []
+            },
             "user": {
               "columns": {
                 "avatarUrl": {
@@ -1729,6 +2133,21 @@
                 "file",
                 "system"
               ]
+            },
+            "SessionKind": {
+              "kind": "valueSet",
+              "values": [
+                "direct",
+                "group"
+              ]
+            },
+            "SessionRole": {
+              "kind": "valueSet",
+              "values": [
+                "owner",
+                "admin",
+                "member"
+              ]
             }
           }
         },
@@ -1736,7 +2155,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "57be00ae7281c1a921c87387ac3a1b3c3633dc81ea370f70e84d980465daf401"
+    "storageHash": "320e671143e2977b6de8587d389db4ea7f5bc29dd1aa6ce96595e5948ec82d78"
   },
   "execution": {
     "executionHash": "410b14ad278f3c4f2ef1b7e0e449ed69d4d5505a49d36e38af1c0be620f3c1f5",

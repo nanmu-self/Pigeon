@@ -38,6 +38,8 @@ export interface SendMessageParams {
   meta?: Record<string, unknown>;
   /** 引用回复：被引用消息 id（必须同会话） */
   replyToId?: number;
+  /** @提及的成员 id（群聊；服务层校验均为成员） */
+  mentions?: string[];
 }
 
 /** meta 序列化后的字节上限 */
@@ -89,14 +91,28 @@ export class SessionsService {
     return toPublicUser(row);
   }
 
-  /** 会话存在性 + 成员校验（任一不满足直接 404/403） */
+  /** 会话存在性 + 成员校验（单聊查 userA/B，群聊查成员表） */
   private async assertMember(sessionId: number, userId: number): Promise<SessionRow> {
     const row = await this.sessionRow(sessionId);
     if (!row) throw new NotFoundException('会话不存在');
-    if (row.userAId !== userId && row.userBId !== userId) {
-      throw new ForbiddenException('你不是该会话的成员');
+    if (row.kind === 'direct') {
+      if (row.userAId !== userId && row.userBId !== userId) {
+        throw new ForbiddenException('你不是该会话的成员');
+      }
+      return row;
     }
+    const member = await this.prisma.orm.public.SessionMember.first({ sessionId, userId });
+    if (!member) throw new ForbiddenException('你不是该群聊的成员');
     return row;
+  }
+
+  /** 群会话的成员 id 列表 */
+  private async memberIds(sessionId: number): Promise<number[]> {
+    const rows = (await this.prisma.orm.public.SessionMember
+      .where({ sessionId })
+      .select('userId')
+      .all()) as Array<{ userId: number }>;
+    return rows.map((r) => r.userId);
   }
 
   // ── 会话 ─────────────────────────────────────────────────
@@ -111,20 +127,32 @@ export class SessionsService {
     let row = (await this.prisma.orm.public.Session.first({ userAId, userBId })) as SessionRow | null;
     row ??= (await this.prisma.orm.public.Session.create({ userAId, userBId })) as SessionRow;
 
-    return toSessionSummary(row, meId, peer, this.ws.isOnline(String(peerId)), 0, null);
+    return toSessionSummary(row, {
+      peer,
+      peerOnline: this.ws.isOnline(String(peerId)),
+      unreadCount: 0,
+      lastMessage: null,
+    });
   }
 
-  /** 我的会话列表：对端资料 + 在线状态 + 最后一条消息 + 未读数，按活跃时间倒序 */
+  /** 我的会话列表：单聊（对端资料/在线）+ 群聊（名称/成员数/角色/禁言），按活跃时间倒序 */
   async list(meId: number): Promise<SessionSummary[]> {
-    const [asA, asB, unread] = await Promise.all([
+    const [asA, asB, myMemberships, unread] = await Promise.all([
       this.prisma.orm.public.Session.where({ userAId: meId }).all(),
       this.prisma.orm.public.Session.where({ userBId: meId }).all(),
+      // 群聊：成员表反查
+      this.prisma.orm.public.SessionMember.where({ userId: meId }).select('sessionId').all() as unknown as Promise<Array<{ sessionId: number }>>,
       // 一次查全所有未读回实行，内存按会话聚合（未读行数 = 未读消息数，规模可控）
       this.prisma.orm.public.MessageStatus.where({ userId: meId, readAt: null })
         .select('sessionId')
         .all() as unknown as Promise<Array<{ sessionId: number }>>,
     ]);
-    const rows = [...asA, ...asB] as SessionRow[];
+
+    const groupIds = myMemberships.map((m) => m.sessionId);
+    const groupRows = (await Promise.all(
+      groupIds.map((id) => this.sessionRow(id)),
+    )) as Array<SessionRow | null>;
+    const rows = [...asA, ...asB, ...groupRows.filter((r): r is SessionRow => r !== null)];
     if (rows.length === 0) return [];
 
     const unreadBySession = new Map<number, number>();
@@ -132,23 +160,46 @@ export class SessionsService {
       unreadBySession.set(r.sessionId, (unreadBySession.get(r.sessionId) ?? 0) + 1);
     }
 
-    // 对端资料 + 最后一条消息（每会话一次点查；会话数少，N+1 可接受）
+    // 对端资料 / 群成员数与角色（每会话一次点查；会话数少，N+1 可接受）
     const summaries = await Promise.all(
       rows.map(async (row) => {
-        const peerId = row.userAId === meId ? row.userBId : row.userAId;
-        const peer = await this.publicUser(peerId);
         const lastMessage = row.lastMessageId ? await this.messageById(row.lastMessageId) : null;
-        return toSessionSummary(
-          row,
-          meId,
+        const unreadCount = unreadBySession.get(row.id) ?? 0;
+        if (row.kind === 'group') {
+          const member = await this.prisma.orm.public.SessionMember.first({
+            sessionId: row.id,
+            userId: meId,
+          });
+          const count = await this.memberCount(row.id);
+          return toSessionSummary(row, {
+            name: row.name ?? '群聊',
+            memberCount: count,
+            myRole: (member?.role as 'owner' | 'admin' | 'member' | null) ?? 'member',
+            muteAll: row.muteAll,
+            unreadCount,
+            lastMessage,
+          });
+        }
+        const peerId = row.userAId === meId ? row.userBId : row.userAId;
+        const peer = peerId !== null ? await this.publicUser(peerId) : ({} as PublicUser);
+        return toSessionSummary(row, {
           peer,
-          this.ws.isOnline(String(peerId)),
-          unreadBySession.get(row.id) ?? 0,
+          peerOnline: peerId !== null && this.ws.isOnline(String(peerId)),
+          unreadCount,
           lastMessage,
-        );
+        });
       }),
     );
     return summaries.sort((a, b) => b.lastMessageAt.localeCompare(a.lastMessageAt));
+  }
+
+  /** 群成员数 */
+  private async memberCount(sessionId: number): Promise<number> {
+    const rows = (await this.prisma.orm.public.SessionMember
+      .where({ sessionId })
+      .select('userId')
+      .all()) as Array<{ userId: number }>;
+    return rows.length;
   }
 
   /** 按 id 查消息行并带上发送者昵称 */
@@ -212,8 +263,6 @@ export class SessionsService {
     }
 
     const session = await this.assertMember(sessionId, senderId);
-    const peerId = session.userAId === senderId ? session.userBId : session.userAId;
-    await this.friends.assertFriends(senderId, peerId);
 
     // 幂等：同 (senderId, clientMsgId) 已落库 → 原样返回（重试不重复落库/推送）
     if (clientMsgId) {
@@ -222,6 +271,36 @@ export class SessionsService {
         clientMsgId,
       })) as MessageRow | null;
       if (existing) return toChatMessage(existing, senderName);
+    }
+
+    // 群聊：全员禁言时仅群主/管理员可发言；直聊：好友闸门
+    let memberIds: number[] | null = null;
+    let peerId: number | null = null;
+    if (session.kind === 'group') {
+      memberIds = await this.memberIds(sessionId);
+      if (!memberIds.includes(senderId)) throw new ForbiddenException('你不是该群聊的成员');
+      const member = await this.prisma.orm.public.SessionMember.first({
+        sessionId,
+        userId: senderId,
+      });
+      const myRole = (member?.role as 'owner' | 'admin' | 'member' | null) ?? 'member';
+      if (session.muteAll && myRole === 'member') {
+        throw new ForbiddenException('群已开启全员禁言');
+      }
+    } else {
+      peerId = session.userAId === senderId ? session.userBId : session.userAId;
+      if (peerId !== null) await this.friends.assertFriends(senderId, peerId);
+    }
+
+    // @提及校验：仅群聊，必须是群成员
+    let mentions: string[] | undefined;
+    if (params.mentions?.length) {
+      if (session.kind !== 'group') throw new BadRequestException('仅群聊可以 @成员');
+      const valid = params.mentions.filter((id) => memberIds!.includes(Number(id)));
+      if (valid.length !== params.mentions.length) {
+        throw new BadRequestException('提及的成员不在群聊中');
+      }
+      mentions = valid;
     }
 
     const message = await this.prisma.client.transaction(async (tx) => {
@@ -233,40 +312,60 @@ export class SessionsService {
         ...(clientMsgId ? { clientMsgId } : {}),
         // pg/json 编解码器要求 JsonValue：普通对象按结构兼容透传（字段值已是 JSON 安全类型）
         ...(meta ? { meta: meta as never } : {}),
+        ...(mentions ? { mentions: mentions as never } : {}),
         ...(replyToId !== undefined ? { replyToId } : {}),
       })) as MessageRow;
 
-      // fan-out 已读回实行：直接单聊只有对端一个接收者（发送者不建行）；
-      // 对端在线 → 推送随即到达其设备，直接记送达
-      const delivered = this.ws.isOnline(String(peerId))
-        ? new Date().toISOString()
-        : null;
-      await tx.orm.public.MessageStatus.create({
-        messageId: row.id,
-        userId: peerId,
-        sessionId,
-        ...(delivered ? { deliveredAt: delivered } : {}),
-      });
+      if (session.kind === 'group') {
+        // 群聊 fan-out：批量插入全部成员（除发送者）的回实行 ——
+        // 落库即计未读，离线成员上线后未读数仍在（打开会话才清零）
+        const recipients = memberIds!.filter((id) => id !== senderId);
+        await tx.orm.public.MessageStatus.createAll(
+          recipients.map((uid) => ({ messageId: row.id, userId: uid, sessionId })),
+        );
+      } else {
+        // 单聊 fan-out：对端一个接收者（发送者不建行）；对端在线 → 记送达
+        const delivered =
+          peerId !== null && this.ws.isOnline(String(peerId)) ? new Date().toISOString() : null;
+        await tx.orm.public.MessageStatus.create({
+          messageId: row.id,
+          userId: peerId!,
+          sessionId,
+          ...(delivered ? { deliveredAt: delivered } : {}),
+        });
+      }
 
       // 会话活跃指针 → 会话列表排序/预览
       await tx.orm.public.Session.where({ id: sessionId }).update({
         lastMessageId: row.id,
         lastMessageAt: row.createdAt,
       });
-      return { row, delivered, peerId };
+      return { row, peerId: peerId ?? null };
     });
 
-    const chatMessage = toChatMessage(message.row, senderName, { replyTo: replySummary });
-    this.ws.toUser(String(message.peerId), 'message:new', chatMessage);
-    this.ws.toUser(String(senderId), 'message:new', chatMessage);
+    const chatMessage = toChatMessage(message.row, senderName, {
+      replyTo: replySummary,
+      ...(mentions ? { mentions } : {}),
+    });
 
-    // 已送达 → 给发送方推送达回执（客户端展示 已发送/已送达/已读）
-    if (message.delivered) {
+    // 推送：单聊推对端 + 自己其他设备；群聊推全部成员（发送者的其他设备
+    // 也靠这里同步，客户端按消息 id 去重）
+    if (session.kind === 'group') {
+      for (const uid of memberIds!) {
+        this.ws.toUser(String(uid), 'message:new', chatMessage);
+      }
+    } else {
+      if (message.peerId !== null) this.ws.toUser(String(message.peerId), 'message:new', chatMessage);
+      this.ws.toUser(String(senderId), 'message:new', chatMessage);
+    }
+
+    // 已送达 → 给发送方推送达回执（仅单聊；群聊送达口径为全员，MVP 不推）
+    if (session.kind === 'direct' && message.peerId !== null && this.ws.isOnline(String(message.peerId))) {
       this.ws.toUser(String(senderId), 'message:delivered', {
         conversationId: String(sessionId),
         userId: String(message.peerId),
         lastDeliveredMessageId: String(message.row.id),
-        deliveredAt: pgTimestampToMs(message.delivered),
+        deliveredAt: Date.now(),
       });
     }
     return chatMessage;
@@ -293,15 +392,26 @@ export class SessionsService {
     const hasMore = rows.length > take;
     const page = rows.slice(0, take).reverse(); // 线上按时间正序
 
-    // 单聊固定两个成员，昵称查两次后走内存映射
-    const [userA, userB] = await Promise.all([
-      this.publicUser(session.userAId),
-      this.publicUser(session.userBId),
-    ]);
-    const nameById = new Map<number, string>([
-      [userA.id, userA.nickname],
-      [userB.id, userB.nickname],
-    ]);
+    // 昵称映射：单聊固定两个成员；群聊取全部成员（群消息发送者可为任意成员）
+    const nameById = new Map<number, string>();
+    if (session.kind === 'group') {
+      const memberRows = (await this.prisma.orm.public.SessionMember
+        .where({ sessionId })
+        .select('userId')
+        .all()) as Array<{ userId: number }>;
+      const users = await Promise.all(memberRows.map((m) => this.publicUser(m.userId)));
+      for (const u of users) nameById.set(u.id, u.nickname);
+    } else {
+      if (session.userAId === null || session.userBId === null) {
+        throw new Error('direct session missing members');
+      }
+      const [userA, userB] = await Promise.all([
+        this.publicUser(session.userAId),
+        this.publicUser(session.userBId),
+      ]);
+      nameById.set(userA.id, userA.nickname);
+      nameById.set(userB.id, userB.nickname);
+    }
 
     // 表情回应按页聚合（每消息一次索引点查，页 ≤100 条，可接受）
     const reactionMap = await this.reactionSummariesFor(page.map((r) => r.id));
@@ -328,7 +438,8 @@ export class SessionsService {
         }),
       ),
       hasMore,
-      ...await this.peerWatermarks(session, meId),
+      // 送达/已读回执仅单聊（群聊的已读为全员口径，MVP 不展示）
+      ...(session.kind === 'direct' ? await this.peerWatermarks(session, meId) : {}),
     };
   }
 
@@ -478,6 +589,7 @@ export class SessionsService {
     meId: number,
   ): Promise<{ peerReadUpTo?: string; peerDeliveredUpTo?: string }> {
     const peerId = session.userAId === meId ? session.userBId : session.userAId;
+    if (peerId === null) return {};
     const rows = (await this.prisma.orm.public.MessageStatus
       .where({ sessionId: session.id, userId: peerId })
       .select('messageId', 'readAt', 'deliveredAt')
@@ -520,6 +632,13 @@ export class SessionsService {
     await this.prisma.orm.public.Session.where({ id: sessionId }).update(
       session.userAId === meId ? { lastReadAtA: readAt } : { lastReadAtB: readAt },
     );
+
+    // 群聊：成员级已读锚点同步更新
+    if (session.kind === 'group') {
+      await this.prisma.orm.public.SessionMember
+        .where({ sessionId, userId: meId })
+        .update({ lastReadAt: readAt });
+    }
 
     // 已读水位 = 会话最新一条消息（fan-out 保证每条消息我都有回实行）
     const latest = (await this.prisma.orm.public.Message

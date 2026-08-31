@@ -242,7 +242,7 @@ describe('聊天链路 (e2e)', () => {
     const summary = (bobSessions.body as SessionSummary[]).find((s) => s.id === sessionId);
     expect(summary?.unreadCount).toBe(1);
     expect(summary?.lastMessage?.content).toBe('你好，Bob！');
-    expect(summary?.peer.id).toBe(alice.user.id);
+    expect(summary?.peer?.id).toBe(alice.user.id);
 
     // 幂等重发：同 clientMsgId → 同一条消息（不新增、不重复推送）
     const resent = await emitAck<WsChatMessage>(socketAlice, 'message:send', {

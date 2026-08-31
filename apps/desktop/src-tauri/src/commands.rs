@@ -167,6 +167,17 @@ pub fn send_message(
     chat::insert_message(&conn, msg).map_err(|e| e.to_string())
 }
 
+/// 确保存在与服务端群会话关联的本地会话（无则创建，幂等）
+#[tauri::command]
+pub fn ensure_group_conversation(
+    state: State<Db>,
+    server_session_id: String,
+    group_name: String,
+) -> Result<Conversation, String> {
+    let conn = lock(&state)?;
+    chat::ensure_group_conversation(&conn, &server_session_id, &group_name).map_err(|e| e.to_string())
+}
+
 /// 合并一条服务端已落库的消息（历史拉取 / WS message:new 共用，幂等）
 #[tauri::command]
 pub fn upsert_server_message(

@@ -180,6 +180,7 @@ class SocketManager {
     kind: WsChatMessage['kind'] = 'text',
     clientMsgId?: string,
     replyToId?: string,
+    mentions?: string[],
   ): Promise<WsChatMessage> {
     const socket = this.requireConnected();
     const res = await socket.emitWithAck('message:send', {
@@ -188,6 +189,7 @@ class SocketManager {
       kind,
       ...(clientMsgId ? { clientMsgId } : {}),
       ...(replyToId ? { replyToId } : {}),
+      ...(mentions?.length ? { mentions } : {}),
     });
     return unwrapAck(res);
   }

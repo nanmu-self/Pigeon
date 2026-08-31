@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { chat } from "$lib/chat-store.svelte";
   import {
     formatConvTime,
@@ -11,6 +11,8 @@
     type ChatMessage,
   } from "$lib/chat";
   import { serverTimeToMs as pgTimeToMs } from "$lib/api/sessions";
+  import { groupsApi } from "$lib/api/groups";
+  import { uploadToQiniu, isUploadCanceled } from "$lib/upload/qiniu";
 
   let draft = $state("");
   let chatEl: HTMLDivElement | undefined = $state();
@@ -19,44 +21,44 @@
   let creating = $state(false);
   let imageInput: HTMLInputElement | undefined = $state();
   let fileInput: HTMLInputElement | undefined = $state();
+  let groupAvatarInput: HTMLInputElement | undefined = $state();
 
-  async function pickFriend(peerId: number) {
-    creating = true;
-    try {
-      await chat.createSession(peerId);
-      pickerOpen = false;
-    } finally {
-      creating = false;
-    }
-  }
+  /** 「新聊天 / 建群」面板 */
+  let createGroupOpen = $state(false);
+  let newGroupName = $state("");
+  let pickedFriendIds = $state<number[]>([]);
+  let creatingGroup = $state(false);
 
-  function onPickImage(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    if (file) void chat.sendAttachment(file);
-    input.value = ""; // 允许重复选择同一文件
-  }
+  /** 群设置面板 */
+  let groupSettingsOpen = $state(false);
+  let editName = $state("");
+  let editAnnouncement = $state("");
+  let inviteOpen = $state(false);
 
-  function onPickFile(e: Event) {
-    const input = e.currentTarget as HTMLInputElement;
-    const file = input.files?.[0];
-    if (file) void chat.sendAttachment(file);
-    input.value = "";
-  }
+  /** 消息悬停/操作 */
+  let hoverMsgId = $state<number | null>(null);
+  const QUICK_EMOJIS = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 
-  async function copyUrl(msg: ChatMessage) {
-    try {
-      await navigator.clipboard.writeText(msg.content);
-    } catch {
-      /* 剪贴板权限失败时静默 */
-    }
-  }
+  const isGroup = $derived(chat.current?.kind === "group");
+  const groupTitle = $derived(
+    chat.current?.kind === "group"
+      ? `${chat.current.name ?? "群聊"}（${chat.current.memberCount ?? 0}）`
+      : (chat.current?.peer?.nickname ?? ""),
+  );
 
   const filteredSessions = $derived(
-    chat.sessions.filter((s) =>
-      s.peer.nickname.toLowerCase().includes(searchQuery.trim().toLowerCase()),
-    ),
+    chat.sessions.filter((s) => {
+      const title = s.kind === "group" ? (s.name ?? "") : (s.peer?.nickname ?? "");
+      return title.toLowerCase().includes(searchQuery.trim().toLowerCase());
+    }),
   );
+
+  function sessionAvatarText(s: (typeof chat.sessions)[number]): string {
+    return s.kind === "group" ? (s.name ?? "群").slice(0, 1) : (s.peer?.nickname ?? "?").slice(0, 1);
+  }
+  function sessionTitle(s: (typeof chat.sessions)[number]): string {
+    return s.kind === "group" ? (s.name ?? "群聊") : (s.peer?.nickname ?? "");
+  }
 
   onMount(() => {
     chat.initWsHandlers();
@@ -73,25 +75,17 @@
   async function select(sessionId: string) {
     const session = chat.sessions.find((s) => s.id === sessionId);
     if (!session) return;
+    groupSettingsOpen = false;
     await chat.openSession(session);
-  }
-
-  /** 上滑加载更早历史（保持滚动位置：预置高度差补偿） */
-  async function loadOlder() {
-    if (!chatEl) return;
-    const prevHeight = chatEl.scrollHeight;
-    const prevTop = chatEl.scrollTop;
-    await chat.loadOlder();
-    requestAnimationFrame(() => {
-      if (chatEl) chatEl.scrollTop = chatEl.scrollHeight - prevHeight + prevTop;
-    });
   }
 
   async function submit() {
     const text = draft;
     if (!text.trim()) return;
     draft = "";
-    await chat.send(text);
+    const mentions = chat.pendingMentions;
+    chat.pendingMentions = [];
+    await chat.send(text, mentions);
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -101,8 +95,16 @@
     }
   }
 
-  const QUICK_EMOJIS = ["👍", "❤️", "😂", "🎉", "👀"] as const;
-  let hoverMsgId = $state<number | null>(null);
+  /** 上滑加载更早历史（保持滚动位置） */
+  async function loadOlder() {
+    if (!chatEl) return;
+    const prevHeight = chatEl.scrollHeight;
+    const prevTop = chatEl.scrollTop;
+    await chat.loadOlder();
+    requestAnimationFrame(() => {
+      if (chatEl) chatEl.scrollTop = chatEl.scrollHeight - prevHeight + prevTop;
+    });
+  }
 
   function startReply(msg: ChatMessage) {
     chat.replyTo = msg;
@@ -120,14 +122,88 @@
     );
   }
 
-  /** 是否可撤回：自己发的、已同步、未撤回、2 分钟内 */
+  function onPickImage(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) void chat.sendAttachment(file);
+    input.value = ""; // 允许重复选择同一文件
+  }
+
+  function onPickFile(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) void chat.sendAttachment(file);
+    input.value = "";
+  }
+
+  /** @ 某条消息的发送者：从群详情成员按昵称反查 id（重名取第一个），记入 mentions */
+  function mentionSender(msg: ChatMessage) {
+    const member = chat.groupDetail?.members.find((m) => m.user.nickname === msg.senderName);
+    if (!member) return; // 群详情未加载或找不到 → 忽略
+    if (!chat.pendingMentions.includes(String(member.user.id))) {
+      chat.pendingMentions = [...chat.pendingMentions, String(member.user.id)];
+    }
+    draft = `${draft}@${msg.senderName} `;
+  }
+
   function canRecall(msg: ChatMessage): boolean {
     return (
-      msg.sender === 'self' &&
+      msg.sender === "self" &&
       msg.serverMsgId !== null &&
       !msg.recalled &&
       Date.now() - msg.createdAt <= 2 * 60 * 1000
     );
+  }
+
+  async function copyUrl(msg: ChatMessage) {
+    try {
+      await navigator.clipboard.writeText(msg.content);
+    } catch {
+      /* 剪贴板权限失败时静默 */
+    }
+  }
+
+  // ── 建群 ──
+  async function submitCreateGroup() {
+    const name = newGroupName.trim();
+    if (!name || pickedFriendIds.length === 0) return;
+    creatingGroup = true;
+    try {
+      await chat.createGroup(name, pickedFriendIds);
+      createGroupOpen = false;
+      newGroupName = "";
+      pickedFriendIds = [];
+    } finally {
+      creatingGroup = false;
+    }
+  }
+
+  // ── 群设置：改名/公告/禁言/头像 ──
+  async function saveGroupName() {
+    if (!chat.groupDetail) return;
+    await chat.renameGroup(chat.groupDetail.id, editName);
+  }
+  async function saveAnnouncement() {
+    if (!chat.groupDetail) return;
+    await chat.setAnnouncement(chat.groupDetail.id, editAnnouncement);
+  }
+  async function uploadGroupAvatar(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file || !chat.groupDetail) return;
+    try {
+      const handle = uploadToQiniu(file, { dir: "avatar", fileName: file.name });
+      const up = await handle.done;
+      await chat.setGroupAvatar(chat.groupDetail.id, up.url);
+    } catch (e) {
+      if (!isUploadCanceled(e)) chat.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+  async function doLeave() {
+    if (!chat.groupDetail) return;
+    await chat.leaveGroup(chat.groupDetail.id);
+    groupSettingsOpen = false;
   }
 </script>
 
@@ -159,7 +235,7 @@
       <div class="flex items-center gap-1">
         <button
           class="rounded-full p-2 transition-colors hover:bg-[var(--p-muted)]"
-          title="新聊天"
+          title="新聊天 / 建群"
           onclick={async () => {
             pickerOpen = !pickerOpen;
             if (pickerOpen) void chat.loadFriends();
@@ -179,16 +255,39 @@
 
     {#if pickerOpen}
       <div class="border-b border-[var(--p-border)] bg-[var(--p-muted)]/40">
-        <p class="px-4 pt-2 text-xs font-medium text-[var(--p-muted-fg)]">选择好友开始聊天</p>
-        <div class="max-h-60 overflow-y-auto py-1">
+        <!-- 建群表单 -->
+        <div class="px-3 pt-2">
+          <input
+            type="text"
+            bind:value={newGroupName}
+            placeholder="群名称（勾选好友后建群）"
+            class="h-8 w-full rounded-md border border-[var(--p-border)] bg-[var(--p-bg)] px-2.5 text-xs text-[var(--p-fg)] placeholder:text-[var(--p-muted-fg)] focus:border-[var(--p-primary)] focus:outline-none"
+          />
+        </div>
+        <p class="px-4 pt-2 text-xs font-medium text-[var(--p-muted-fg)]">选择好友（单聊：只选一个；建群：勾选多个）</p>
+        <div class="scroll-area-thin max-h-60 overflow-y-auto py-1">
           {#if chat.friends.length === 0}
             <p class="px-4 py-3 text-sm text-[var(--p-muted-fg)]">还没有好友，先去「通讯录」添加</p>
           {:else}
             {#each chat.friends as friend (friend.user.id)}
               <button
                 class="flex w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-[var(--p-muted)]/60 disabled:opacity-50"
-                disabled={creating}
-                onclick={() => void pickFriend(friend.user.id)}
+                onclick={async () => {
+                  // 单聊：直接打开会话；建群模式：勾选
+                  if (newGroupName.trim() === "") {
+                    creating = true;
+                    try {
+                      await chat.createSession(friend.user.id);
+                      pickerOpen = false;
+                    } finally {
+                      creating = false;
+                    }
+                  } else {
+                    pickedFriendIds = pickedFriendIds.includes(friend.user.id)
+                      ? pickedFriendIds.filter((id) => id !== friend.user.id)
+                      : [...pickedFriendIds, friend.user.id];
+                  }
+                }}
               >
                 <div class="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--p-secondary)] text-xs font-medium text-[var(--p-secondary-fg)]">
                   {friend.user.nickname.slice(0, 1)}
@@ -197,10 +296,24 @@
                 {#if friend.online}
                   <span class="h-2 w-2 rounded-full bg-green-500"></span>
                 {/if}
+                {#if newGroupName.trim() !== ""}
+                  <input type="checkbox" checked={pickedFriendIds.includes(friend.user.id)} class="pointer-events-none" />
+                {/if}
               </button>
             {/each}
           {/if}
         </div>
+        {#if newGroupName.trim() !== ""}
+          <div class="border-t border-[var(--p-border)] px-3 py-2">
+            <button
+              class="w-full rounded-md bg-[var(--p-primary)] py-1.5 text-xs font-medium text-[var(--p-primary-fg)] transition-opacity disabled:opacity-50"
+              disabled={creatingGroup || pickedFriendIds.length === 0}
+              onclick={() => void submitCreateGroup()}
+            >
+              {creatingGroup ? "创建中…" : `创建「${newGroupName.trim()}」(${pickedFriendIds.length + 1} 人)`}
+            </button>
+          </div>
+        {/if}
       </div>
     {/if}
 
@@ -218,7 +331,7 @@
         <p class="px-4 py-6 text-center text-sm text-[var(--p-muted-fg)]">加载中…</p>
       {:else if filteredSessions.length === 0}
         <p class="px-4 py-6 text-center text-sm text-[var(--p-muted-fg)]">
-          暂无会话，去「通讯录」发起聊天
+          暂无会话，点右上角「+」发起聊天或建群
         </p>
       {:else}
         {#each filteredSessions as session (session.id)}
@@ -227,27 +340,27 @@
             class="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--p-muted)]/50 {chat.current?.id === session.id ? 'bg-[var(--p-muted)]/70' : ''}"
           >
             <div class="relative shrink-0">
-              <div class="flex h-12 w-12 items-center justify-center rounded-full bg-[var(--p-primary)] font-medium text-[var(--p-primary-fg)]">
-                {session.peer.nickname.slice(0, 1)}
+              <div class="flex h-12 w-12 items-center justify-center rounded-full {session.kind === 'group' ? 'rounded-xl bg-[var(--p-secondary)]' : 'bg-[var(--p-primary)]'} font-medium text-[var(--p-primary-fg)]">
+                {sessionAvatarText(session)}
               </div>
-              {#if session.peerOnline}
+              {#if session.kind === 'direct' && session.peerOnline}
                 <div class="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[var(--p-card)] bg-green-500"></div>
               {/if}
             </div>
             <div class="min-w-0 flex-1">
               <div class="flex items-center justify-between">
-                <span class="truncate font-medium text-[var(--p-fg)]">{session.peer.nickname}</span>
+                <span class="truncate font-medium text-[var(--p-fg)]">{sessionTitle(session)}</span>
                 {#if session.lastMessage}
                   <span class="shrink-0 text-xs text-[var(--p-muted-fg)]">{formatConvTime(pgTimeToMs(session.lastMessageAt))}</span>
                 {/if}
               </div>
               <div class="mt-0.5 flex items-center justify-between">
                 <p class="truncate text-sm text-[var(--p-muted-fg)]">
-                  {session.lastMessage?.content ?? "开始聊天吧"}
+                  {session.lastMessage ? `${session.lastMessage.senderName ? session.lastMessage.senderName + '：' : ''}${session.lastMessage.content}` : (session.kind === 'group' ? '群聊已创建' : '开始聊天吧')}
                 </p>
                 {#if session.unreadCount > 0}
                   <span class="ml-2 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-red-500 px-1.5 text-[11px] font-semibold text-white">
-                    {session.unreadCount > 99 ? '99+' : session.unreadCount}
+                    {session.unreadCount > 99 ? "99+" : session.unreadCount}
                   </span>
                 {/if}
               </div>
@@ -261,21 +374,51 @@
   <!-- ══ 聊天区 ════════════════════════════════════════ -->
   {#if chat.current && chat.localConversation}
     <div class="flex min-w-0 flex-1 flex-col bg-[var(--p-muted)]/30">
-      <!-- 头部：对端 + 在线状态 -->
+      <!-- 头部 -->
       <div class="flex items-center gap-3 border-b border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3">
         <div class="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--p-primary)] text-sm font-medium text-[var(--p-primary-fg)]">
-          {chat.current.peer.nickname.slice(0, 1)}
+          {sessionAvatarText(chat.current)}
         </div>
         <div>
-          <p class="font-medium leading-tight text-[var(--p-fg)]">{chat.current.peer.nickname}</p>
+          <p class="font-medium leading-tight text-[var(--p-fg)]">{groupTitle}</p>
           <p class="text-xs leading-tight text-[var(--p-muted-fg)]">
-            {chat.current.peerOnline ? "在线" : "离线"}
+            {#if isGroup}
+              {chat.current.muteAll ? "全员禁言中" : "群聊"}
+            {:else}
+              {chat.current.peerOnline ? "在线" : "离线"}
+            {/if}
           </p>
         </div>
         {#if chat.error}
           <span class="ml-auto text-xs text-red-500">{chat.error}</span>
         {/if}
+        {#if isGroup}
+          <button
+            class="ml-auto rounded-full p-2 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
+            title="群设置"
+            onclick={async () => {
+              groupSettingsOpen = !groupSettingsOpen;
+              if (groupSettingsOpen && chat.current) {
+                editName = chat.current.name ?? "";
+                editAnnouncement = chat.groupDetail?.announcement ?? "";
+                await chat.loadGroupDetail(chat.current.id);
+                editName = chat.groupDetail?.name ?? "";
+                editAnnouncement = chat.groupDetail?.announcement ?? "";
+              }
+            }}
+          >
+            <svg class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        {/if}
       </div>
+
+      <!-- 群公告横幅 -->
+      {#if isGroup && chat.groupDetail?.announcement}
+        <div class="flex items-center gap-2 border-b border-[var(--p-border)] bg-amber-50/80 px-4 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+          <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+          <span class="truncate">{chat.groupDetail.announcement}</span>
+        </div>
+      {/if}
 
       <!-- 消息流（本地优先渲染） -->
       <div bind:this={chatEl} class="flex-1 overflow-y-auto px-4 py-4">
@@ -305,13 +448,15 @@
           >
             {#if msg.sender === 'system' || msg.recalled}
               <span class="rounded-full bg-[var(--p-muted)] px-3 py-1 text-xs text-[var(--p-muted-fg)]">
-                {msg.recalled ? (msg.sender === 'self' ? '你撤回了一条消息' : `${msg.senderName} 撤回了一条消息`) : msg.content}
+                {msg.recalled
+                  ? (msg.sender === 'self' ? '你撤回了一条消息' : `${msg.senderName} 撤回了一条消息`)
+                  : msg.content}
               </span>
             {:else}
               {@const replyInfo = parseReplySummary(msg.replySummary)}
               <div class="relative flex max-w-[70%] flex-col {msg.sender === 'self' ? 'items-end' : 'items-start'}">
-                <!-- 引用预览块 -->
                 {#if replyInfo}
+                  <!-- 引用预览块 -->
                   <div
                     class="mb-1 max-w-full truncate rounded-lg border-l-2 border-[var(--p-primary)] bg-[var(--p-muted)]/60 px-2.5 py-1 text-xs text-[var(--p-muted-fg)]"
                     title={replyInfo.content}
@@ -331,8 +476,8 @@
                     onclick={() => void copyUrl(msg)}
                   />
                 {:else if msg.kind === 'file'}
-                  <!-- 文件消息：文件卡片 -->
                   {@const meta = parseMessageMeta(msg.meta)}
+                  <!-- 文件消息：文件卡片 -->
                   <div
                     class="flex items-center gap-3 rounded-xl border border-[var(--p-border)] bg-[var(--p-card)] px-3.5 py-2.5 {msg.sender === 'self' ? 'rounded-br-sm' : 'rounded-bl-sm'}"
                     title={msg.content}
@@ -362,10 +507,13 @@
                   </div>
                 {/if}
 
-                <!-- 时间 / 状态勾 / 表情回应 chips -->
+                <!-- 时间 / 状态勾 / 表情回应 chips / @我 徽章 -->
                 <div class="mt-0.5 flex items-center gap-1 {msg.sender === 'self' ? 'flex-row-reverse' : ''}">
                   {#if msg.sender === 'self'}{@render statusTicks(msg)}{/if}
                   <span class="text-[10px] text-[var(--p-muted-fg)]">{formatMsgTime(msg.createdAt)}</span>
+                  {#if msg.serverMsgId && chat.liveMentionedIds.includes(msg.serverMsgId)}
+                    <span class="rounded bg-red-100 px-1 text-[10px] font-medium text-red-600 dark:bg-red-900/40 dark:text-red-300">@我</span>
+                  {/if}
                   {#each parseReactions(msg.reactions) as group (group.emoji)}
                     <button
                       class="flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[11px] transition-colors {isMineReaction(msg, group.emoji)
@@ -380,9 +528,9 @@
                   {/each}
                 </div>
 
-                <!-- 悬停操作条：回复 + 快捷 emoji -->
-                {#if hoverMsgId === msg.id && msg.status !== 'sending'}
-                  <div class="absolute top-0 {msg.sender === 'self' ? '-left-2 -translate-x-full' : '-right-2 translate-x-full'} z-10 flex items-center gap-0.5 rounded-full border border-[var(--p-border)] bg-[var(--p-card)] px-1 py-0.5 shadow-md">
+                <!-- 悬停操作条：回复 / @发送者 / 快捷 emoji / 撤回 -->
+                {#if hoverMsgId === msg.id && msg.status !== 'sending' && !msg.recalled}
+                  <div class="absolute top-0 z-10 flex items-center gap-0.5 rounded-full border border-[var(--p-border)] bg-[var(--p-card)] px-1 py-0.5 shadow-md {msg.sender === 'self' ? '-left-2 -translate-x-full' : '-right-2 translate-x-full'}">
                     <button
                       class="rounded-full p-1.5 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
                       title="引用回复"
@@ -390,6 +538,20 @@
                     >
                       <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
                     </button>
+                    {#if isGroup}
+                      <button
+                        class="rounded-full px-1.5 py-1 text-xs font-medium text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
+                        title="@{msg.senderName}"
+                        onclick={() => mentionSender(msg)}
+                      >@</button>
+                    {/if}
+                    {#each QUICK_EMOJIS as emoji (emoji)}
+                      <button
+                        class="rounded-full p-1 text-sm transition-transform hover:scale-125"
+                        title="回应 {emoji}"
+                        onclick={() => void chat.toggleReaction(msg, emoji)}
+                      >{emoji}</button>
+                    {/each}
                     {#if canRecall(msg)}
                       <button
                         class="rounded-full p-1.5 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-red-500"
@@ -399,13 +561,6 @@
                         <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
                       </button>
                     {/if}
-                    {#each QUICK_EMOJIS as emoji (emoji)}
-                      <button
-                        class="rounded-full p-1 text-sm transition-transform hover:scale-125"
-                        title="回应 {emoji}"
-                        onclick={() => void chat.toggleReaction(msg, emoji)}
-                      >{emoji}</button>
-                    {/each}
                   </div>
                 {/if}
               </div>
@@ -416,7 +571,6 @@
 
       <!-- 输入区 -->
       <div class="border-t border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3">
-        <!-- 回复中状态条 -->
         {#if chat.replyTo}
           <div class="mb-2 flex items-center gap-2 rounded-lg border-l-2 border-[var(--p-primary)] bg-[var(--p-muted)]/40 px-3 py-1.5">
             <svg class="h-3.5 w-3.5 shrink-0 text-[var(--p-primary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
@@ -426,23 +580,12 @@
             <button class="text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]" onclick={() => chat.cancelReply()}>×</button>
           </div>
         {/if}
-        <!-- 七牛上传进度（进行中显示，可取消） -->
-        {#if chat.uploadProgress}
-          <div class="mb-2 flex items-center gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-muted)]/40 px-3 py-1.5">
-            <svg class="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-            <span class="min-w-0 flex-1 truncate text-xs text-[var(--p-fg)]">上传 {chat.uploadProgress.fname}</span>
-            <div class="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--p-muted)]">
-              <div class="h-full rounded-full bg-[var(--p-primary)] transition-all" style="width: {chat.uploadProgress.percent}%"></div>
-            </div>
-            <span class="w-9 text-right text-xs tabular-nums text-[var(--p-muted-fg)]">{chat.uploadProgress.percent}%</span>
-            <button
-              class="text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
-              onclick={() => chat.cancelUpload()}
-            >取消</button>
+        {#if chat.pendingMentions.length > 0}
+          <div class="mb-2 text-xs text-[var(--p-muted-fg)]">
+            将 @ {chat.pendingMentions.length} 位成员
           </div>
         {/if}
         <div class="flex items-end gap-2">
-          <!-- 图片 / 文件附件（七牛直传，dir=chat） -->
           <input type="file" accept="image/*" class="hidden" bind:this={imageInput} onchange={onPickImage} />
           <input type="file" class="hidden" bind:this={fileInput} onchange={onPickFile} />
           <button
@@ -465,8 +608,9 @@
             bind:value={draft}
             onkeydown={onKeydown}
             rows="1"
-            placeholder="输入消息，Enter 发送（Shift+Enter 换行）"
-            class="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-[var(--p-border)] bg-[var(--p-bg)] px-3 py-2 text-sm placeholder:text-[var(--p-muted-fg)] focus:border-[var(--p-primary)] focus:outline-none"
+            placeholder={chat.current.muteAll && chat.current.myRole === 'member' ? "群已全员禁言" : "输入消息，Enter 发送（Shift+Enter 换行）"}
+            disabled={!!(chat.current.muteAll && chat.current.myRole === 'member')}
+            class="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-[var(--p-border)] bg-[var(--p-bg)] px-3 py-2 text-sm placeholder:text-[var(--p-muted-fg)] focus:border-[var(--p-primary)] focus:outline-none disabled:opacity-60"
           ></textarea>
           <button
             onclick={() => void submit()}
@@ -479,6 +623,146 @@
         </div>
       </div>
     </div>
+
+    <!-- ══ 群设置面板 ════════════════════════════════ -->
+    {#if groupSettingsOpen && chat.groupDetail}
+      {@const gd = chat.groupDetail}
+      {@const canManage = gd.myRole === 'owner' || gd.myRole === 'admin'}
+      <div class="fixed inset-0 z-50 flex justify-end bg-black/40" role="presentation" onclick={() => (groupSettingsOpen = false)}>
+        <div
+          class="flex h-full w-[380px] flex-col overflow-y-auto border-l border-[var(--p-border)] bg-[var(--p-card)] p-4"
+          onclick={(e) => e.stopPropagation()}
+        >
+          <div class="mb-4 flex items-center justify-between">
+            <h2 class="text-lg font-semibold text-[var(--p-fg)]">群设置</h2>
+            <button class="text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]" onclick={() => (groupSettingsOpen = false)}>×</button>
+          </div>
+
+          <!-- 群名 + 头像 -->
+          <div class="mb-4 flex items-center gap-3">
+            <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--p-secondary)] text-lg font-medium text-[var(--p-secondary-fg)]">
+              {gd.name.slice(0, 1)}
+            </div>
+            <div class="flex-1">
+              <input
+                value={editName}
+                disabled={!canManage}
+                class="h-8 w-full rounded-md border border-[var(--p-border)] bg-[var(--p-bg)] px-2 text-sm text-[var(--p-fg)] disabled:opacity-60"
+              />
+            </div>
+            {#if canManage}
+              <button
+                class="rounded-md border border-[var(--p-border)] px-2 py-1 text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
+                onclick={() => void saveGroupName()}
+              >保存</button>
+              <button
+                class="rounded-md border border-[var(--p-border)] px-2 py-1 text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
+                title="上传群头像"
+                onclick={() => groupAvatarInput?.click()}
+              >头像</button>
+              <input type="file" accept="image/*" class="hidden" bind:this={groupAvatarInput} onchange={uploadGroupAvatar} />
+            {/if}
+          </div>
+
+          <!-- 群公告 -->
+          <div class="mb-4">
+            <p class="mb-1 text-xs font-medium text-[var(--p-muted-fg)]">群公告</p>
+            <textarea
+              bind:value={editAnnouncement}
+              rows="3"
+              disabled={!canManage}
+              class="w-full resize-none rounded-md border border-[var(--p-border)] bg-[var(--p-bg)] px-2 py-1.5 text-sm text-[var(--p-fg)] disabled:opacity-60"
+            ></textarea>
+            {#if canManage}
+              <button
+                class="mt-1 rounded-md border border-[var(--p-border)] px-2 py-1 text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
+                onclick={() => void saveAnnouncement()}
+              >发布公告</button>
+            {/if}
+          </div>
+
+          <!-- 全员禁言 -->
+          <div class="mb-4 flex items-center justify-between rounded-lg border border-[var(--p-border)] px-3 py-2">
+            <span class="text-sm text-[var(--p-fg)]">全员禁言（仅管理员可发言）</span>
+            {#if canManage}
+              <input
+                type="checkbox"
+                checked={gd.muteAll}
+                onchange={(e) => void chat.setMuteAll(gd.id, (e.currentTarget as HTMLInputElement).checked)}
+              />
+            {:else}
+              <span class="text-xs text-[var(--p-muted-fg)]">{gd.muteAll ? "已开启" : "未开启"}</span>
+            {/if}
+          </div>
+
+          <!-- 成员列表 -->
+          <div class="mb-2 flex items-center justify-between">
+            <p class="text-xs font-medium text-[var(--p-muted-fg)]">成员（{gd.members.length}）</p>
+            {#if canManage}
+              <button
+                class="text-xs text-[var(--p-primary)] hover:underline"
+                onclick={async () => {
+                  inviteOpen = !inviteOpen;
+                  if (inviteOpen) void chat.loadFriends();
+                }}
+              >+ 邀请</button>
+            {/if}
+          </div>
+          {#if inviteOpen}
+            <div class="mb-2 max-h-40 overflow-y-auto rounded-lg border border-[var(--p-border)] p-1">
+              {#if chat.friends.length === 0}
+                <p class="px-2 py-1 text-xs text-[var(--p-muted-fg)]">没有可邀请的好友</p>
+              {:else}
+                {#each chat.friends as friend (friend.user.id)}
+                  {#if !gd.members.some((m) => m.user.id === friend.user.id)}
+                    <button
+                      class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-[var(--p-muted)]"
+                      onclick={() => {
+                        void chat.inviteMembers(gd.id, [friend.user.id]);
+                        inviteOpen = false;
+                      }}
+                    >
+                      <span class="flex h-7 w-7 items-center justify-center rounded-full bg-[var(--p-secondary)] text-xs">{friend.user.nickname.slice(0, 1)}</span>
+                      {friend.user.nickname}
+                    </button>
+                  {/if}
+                {/each}
+              {/if}
+            </div>
+          {/if}
+          <div class="mb-4 space-y-1">
+            {#each gd.members as member (member.user.id)}
+              <div class="flex items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-[var(--p-muted)]/50">
+                <span class="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--p-secondary)] text-xs font-medium text-[var(--p-secondary-fg)]">{member.user.nickname.slice(0, 1)}</span>
+                <span class="flex-1 truncate text-sm text-[var(--p-fg)]">{member.user.nickname}</span>
+                {#if member.role !== 'member'}
+                  <span class="rounded bg-[var(--p-primary-muted)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--p-primary)]">{member.role === 'owner' ? '群主' : '管理员'}</span>
+                {/if}
+                <span class="h-2 w-2 rounded-full {member.online ? 'bg-green-500' : 'bg-[var(--p-border)]'}" title={member.online ? '在线' : '离线'}></span>
+                {#if gd.myRole === 'owner' && member.role !== 'owner'}
+                  <button class="text-xs text-[var(--p-primary)] hover:underline" title="转让群主"
+                    onclick={() => void chat.transferOwner(gd.id, member.user.id)}>转让</button>
+                {/if}
+                {#if canManage && String(member.user.id) !== chat.myUserId && !(member.role === 'admin' && gd.myRole === 'admin')}
+                  <button class="text-xs text-red-500 hover:underline" title="移出群聊"
+                    onclick={() => void chat.kickMember(gd.id, member.user.id)}>移除</button>
+                {/if}
+              </div>
+            {/each}
+          </div>
+
+          <!-- 退出 -->
+          {#if gd.myRole !== 'owner'}
+            <button
+              class="mt-auto rounded-lg border border-red-300 py-2 text-sm font-medium text-red-500 transition-colors hover:bg-red-50 dark:hover:bg-red-900/20"
+              onclick={() => void doLeave()}
+            >退出群聊</button>
+          {:else}
+            <p class="mt-auto text-center text-xs text-[var(--p-muted-fg)]">群主需先转让群主后才能退出</p>
+          {/if}
+        </div>
+      </div>
+    {/if}
   {:else}
     <div class="flex flex-1 items-center justify-center bg-[var(--p-muted)]/30">
       <div class="text-center">
@@ -488,7 +772,7 @@
           </svg>
         </div>
         <p class="text-[var(--p-muted-fg)]">
-          {chat.sessions.length === 0 ? "左侧会话为空：先在「通讯录」添加好友并发起聊天" : "选择一个对话开始聊天"}
+          {chat.sessions.length === 0 ? "左侧会话为空：点右上角「+」单聊或建群" : "选择一个对话开始聊天"}
         </p>
       </div>
     </div>
