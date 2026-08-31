@@ -103,3 +103,9 @@ lerna-debug.log*
 # ============================================
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# ============================================
+# 本地 AI 工具（codegraph / MCP，个人环境不入库）
+# ============================================
+.codegraph/
+.mcp.json

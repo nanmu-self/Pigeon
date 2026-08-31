@@ -7,6 +7,7 @@
   import { showToast } from "$lib/toast";
   import { ApiError, rememberEmailStore, tokenStore } from "$lib/api/http";
   import { authApi } from "$lib/api/auth";
+  import { profile } from "$lib/api/profile.svelte";
 
   type Mode = "login" | "register";
 
@@ -74,6 +75,8 @@
       // 记住我：勾选 → 长期凭据 + 记住邮箱；不勾 → 仅当前会话
       tokenStore.set(result.token, rememberMe);
       rememberEmailStore.set(rememberMe ? email.trim().toLowerCase() : "");
+      // 登录结果里已含用户资料，直接写入全局状态（省一次 GET /users/me）
+      profile.set(result.user);
 
       showToast(isLogin ? "登录成功" : "注册成功", { type: "success" });
       setTimeout(() => goto("/messages"), 500);

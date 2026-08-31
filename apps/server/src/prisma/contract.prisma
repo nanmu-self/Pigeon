@@ -5,6 +5,7 @@ model User {
   email     String   @unique
   password  String
   nickname  String
+  avatarUrl String?
   createdAt TimestamptzString @default(now())
   updatedAt temporal.updatedAtString()
 }

@@ -5,6 +5,7 @@
   import { page } from "$app/stores";
   import { ws } from "$lib/api/socket.svelte";
   import { serverApi } from "$lib/api/http";
+  import { profile } from "$lib/api/profile.svelte";
 
   // ── State ────────────────────────────────────────────────
   let commandOpen = $state(false);
@@ -50,6 +51,7 @@
   onMount(() => {
     ws.connect();
     void probeApi();
+    void profile.load();
     const timer = setInterval(probeApi, 30_000);
     return () => clearInterval(timer);
   });
@@ -140,11 +142,20 @@
       style="width: 60px;"
     >
       <button
-        class="mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-[var(--p-secondary)] text-xs font-bold text-[var(--p-secondary-fg)] hover:bg-[var(--p-primary-muted)] hover:text-[var(--p-primary)] transition-fast"
+        onclick={() => navigateTo("/settings")}
+        class="mb-3 flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-[var(--p-secondary)] text-xs font-bold text-[var(--p-secondary-fg)] transition-fast hover:opacity-80"
         aria-label="个人资料"
         title="个人资料"
       >
-        ME
+        {#if profile.avatarUrl}
+          <img
+            src={profile.avatarUrl}
+            alt={profile.displayName}
+            class="h-full w-full object-cover"
+          />
+        {:else}
+          {profile.displayName.slice(0, 2).toUpperCase()}
+        {/if}
       </button>
 
       <div></div>

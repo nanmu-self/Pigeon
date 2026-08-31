@@ -36,7 +36,16 @@ export interface PublicUser {
   id: number;
   email: string;
   nickname: string;
+  /** 七牛外链头像地址（未设置时缺省） */
+  avatarUrl?: string;
   createdAt: string;
+}
+
+/** PATCH /users/me 入参（部分更新：只传需要改的字段） */
+export interface UpdateProfileInput {
+  nickname?: string;
+  /** 头像外链（来自 UploadTicket.publicUrl） */
+  avatarUrl?: string;
 }
 
 /** 注册/登录成功响应 */
@@ -67,6 +76,64 @@ export interface LoginInput {
   password: string;
   captchaId: string;
   captchaCode: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 文件存储（七牛云 Kodo 直传）契约
+//
+// 流程：desktop 携带 JWT 请求 POST /storage/upload-token → server 校验后
+// 按目录生成受限上传凭证（scope 定向到服务端生成的 key）→ desktop 用
+// qiniu-js 凭 token 直传七牛，不经过业务服务器中转。
+//
+// 注意：本包运行时零依赖（无 main/exports/JS 产物），两端只能 import type；
+// 需要值形式的白名单/常量时，在使用方模块内定义并用编译期断言对齐类型
+// （参考 apps/server/src/storage/dto.ts）。
+// ─────────────────────────────────────────────────────────────
+
+/** 上传目录：决定存储路径前缀、大小限制与（头像的）类型限制 */
+export type UploadDir = 'avatar' | 'chat' | 'file';
+
+/** POST /storage/upload-token 入参 */
+export interface UploadTokenInput {
+  /** 上传目录，缺省为 file */
+  dir?: UploadDir;
+  /** 原始文件名，服务端用于推断扩展名（不作为存储名） */
+  fileName?: string;
+}
+
+/** POST /storage/upload-token 响应：前端直传所需的一票式凭证 */
+export interface UploadTicket {
+  /** 七牛上传凭证（前端直传时作为 token 参数） */
+  token: string;
+  /** 服务端生成的资源名（scope 已定向到该 key，前端原样使用，不可自改） */
+  key: string;
+  /** 存储区域代号（z0/z1/z2/na0/as0），映射 qiniu.region */
+  region: string;
+  /** 空间外链域名（不含末尾斜杠，含协议） */
+  domain: string;
+  /** 上传成功后的最终访问地址 = domain + '/' + key */
+  publicUrl: string;
+  /** 凭证过期时间（Unix 秒） */
+  expiresAt: number;
+  /** 该目录允许的最大文件大小（字节），超出时七牛直接拒绝 */
+  maxSize: number;
+}
+
+/**
+ * GET /storage/session-token 响应：目录级会话凭证（仅 chat/file）。
+ * scope=bucket + insertOnly，同一凭证在有效期内可复用于该目录的多个文件；
+ * key 由客户端按 `{dir}/{年月}/{uuid}.{净化ext}` 规则生成（chat 前缀配合
+ * 七牛生命周期规则自动清理）。有效期默认 1 小时，客户端剩余 < 10 分钟时懒刷新。
+ */
+export interface UploadSessionTicket {
+  token: string;
+  /** 空间外链域名（不含末尾斜杠），最终 URL = domain + '/' + key */
+  domain: string;
+  region: string;
+  /** 凭证过期时间（Unix 秒） */
+  expiresAt: number;
+  /** 该目录允许的最大文件大小（字节） */
+  maxSize: number;
 }
 
 // ─────────────────────────────────────────────────────────────
