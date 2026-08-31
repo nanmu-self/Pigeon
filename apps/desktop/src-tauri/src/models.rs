@@ -23,13 +23,13 @@ pub const MSG_FILE: &str = "file";
 #[allow(dead_code)]
 pub const MSG_SYSTEM: &str = "system";
 
-/// 消息状态：发送中 / 已发出 / 失败 / 已读
+/// 消息状态：发送中 / 已发出 / 已送达 / 失败 / 已读
 #[allow(dead_code)]
 pub const STATUS_SENDING: &str = "sending";
 pub const STATUS_SENT: &str = "sent";
+pub const STATUS_DELIVERED: &str = "delivered";
 #[allow(dead_code)]
 pub const STATUS_FAILED: &str = "failed";
-#[allow(dead_code)]
 pub const STATUS_READ: &str = "read";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +41,12 @@ pub struct Conversation {
     pub name: String,
     /// 对端用户 ID（接入服务端后用于关联账号）
     pub peer_id: Option<String>,
+    /// 服务端会话 id（WS conversationId / REST /sessions 的 id），同步锚点
+    pub server_session_id: Option<String>,
+    /// 对端已读水位：对端已读的最大服务端消息 id
+    pub peer_read_msg_id: Option<i64>,
+    /// 对端送达水位：已送达对端的最大服务端消息 id
+    pub peer_delivered_msg_id: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -67,6 +73,9 @@ pub struct ConversationSummary {
     pub kind: String,
     pub name: String,
     pub peer_id: Option<String>,
+    pub server_session_id: Option<String>,
+    pub peer_read_msg_id: Option<i64>,
+    pub peer_delivered_msg_id: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
     pub last_message: Option<LastMessage>,
@@ -98,8 +107,35 @@ pub struct ChatMessage {
     /// text | image | file | system
     pub kind: String,
     pub content: String,
-    /// sending | sent | failed | read
+    /// sending | sent | delivered | failed | read
     pub status: String,
+    /// 本机发送的 optimistic 占位键（发送/重发/状态回填的关联键；接收消息为空）
+    pub client_msg_id: Option<String>,
     /// Unix 毫秒时间戳
     pub created_at: i64,
+}
+
+/// 服务端已落库的消息（历史拉取 / WS message:new 合并入参）
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerMessage {
+    pub conversation_id: i64,
+    /// 服务端消息 id（字符串数字）
+    pub server_msg_id: String,
+    pub sender: String,
+    pub sender_name: String,
+    pub kind: String,
+    pub content: String,
+    /// 服务端时间（Unix 毫秒）—— 本地排序的权威时间
+    pub created_at: i64,
+    /// 本机发出的消息带此字段（与 optimistic 占位行关联）
+    pub client_msg_id: Option<String>,
+}
+
+/// 合并结果：inserted = false 表示本地已有（幂等跳过或占位行补全）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MergeResult {
+    pub message: ChatMessage,
+    pub inserted: bool,
 }

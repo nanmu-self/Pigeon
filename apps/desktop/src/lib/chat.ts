@@ -7,13 +7,19 @@ import { invoke } from "@tauri-apps/api/core";
 export type ConversationKind = "direct" | "group";
 export type MessageSender = "self" | "other" | "system";
 export type MessageKind = "text" | "image" | "file" | "system";
-export type MessageStatus = "sending" | "sent" | "failed" | "read";
+export type MessageStatus = "sending" | "sent" | "delivered" | "failed" | "read";
 
 export interface Conversation {
   id: number;
   kind: ConversationKind;
   name: string;
   peerId: string | null;
+  /** 服务端会话 id（同步锚点） */
+  serverSessionId: string | null;
+  /** 对端已读水位（服务端消息 id） */
+  peerReadMsgId: number | null;
+  /** 对端送达水位（服务端消息 id） */
+  peerDeliveredMsgId: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -32,6 +38,25 @@ export interface ConversationSummary extends Conversation {
   unreadCount: number;
 }
 
+/** 合并结果：inserted = false 表示本地已有（幂等跳过或占位行补全） */
+export interface MergeResult {
+  message: ChatMessage;
+  inserted: boolean;
+}
+
+/** 服务端已落库消息的合并入参（对应 Rust ServerMessage） */
+export interface ServerMessageInput {
+  conversationId: number;
+  serverMsgId: string;
+  sender: MessageSender;
+  senderName: string;
+  kind: MessageKind;
+  content: string;
+  /** 服务端时间（Unix 毫秒）—— 本地排序的权威时间 */
+  createdAt: number;
+  clientMsgId?: string;
+}
+
 export interface ChatMessage {
   id: number;
   conversationId: number;
@@ -40,6 +65,8 @@ export interface ChatMessage {
   kind: MessageKind;
   content: string;
   status: MessageStatus;
+  /** 本机发送的占位键（重发/状态回填关联键；接收消息为空） */
+  clientMsgId: string | null;
   /** Unix 毫秒时间戳 */
   createdAt: number;
 }
@@ -51,11 +78,48 @@ export const chatApi = {
   createConversation: (name: string, kind: ConversationKind = "direct") =>
     invoke<Conversation>("create_conversation", { name, kind }),
 
-  getMessages: (conversationId: number, limit?: number, beforeId?: number) =>
-    invoke<ChatMessage[]>("get_messages", { conversationId, limit, beforeId }),
+  /** 确保存在与服务端会话关联的本地会话（无则创建，幂等） */
+  ensureConversation: (serverSessionId: string, peerId: string, peerName: string) =>
+    invoke<Conversation>("ensure_conversation", { serverSessionId, peerId, peerName }),
 
-  sendMessage: (conversationId: number, content: string) =>
-    invoke<ChatMessage>("send_message", { conversationId, content }),
+  getMessages: (
+    conversationId: number,
+    limit?: number,
+    beforeCreatedAt?: number,
+    beforeId?: number,
+  ) =>
+    invoke<ChatMessage[]>("get_messages", {
+      conversationId,
+      limit,
+      beforeCreatedAt,
+      beforeId,
+    }),
+
+  /** optimistic 发送：先落 sending 占位行，ack 后 acknowledge 回填 */
+  sendMessage: (conversationId: number, content: string, clientMsgId: string) =>
+    invoke<ChatMessage>("send_message", { conversationId, content, clientMsgId }),
+
+  /** 合并一条服务端消息（幂等：WS 推送 / 历史拉取共用） */
+  upsertServerMessage: (message: ServerMessageInput) =>
+    invoke<MergeResult>("upsert_server_message", { message }),
+
+  /** ack 回填：占位行 → 服务端 id + 服务端时间 + sent */
+  acknowledgeMessage: (clientMsgId: string, serverMsgId: string, createdAt: number) =>
+    invoke<ChatMessage>("acknowledge_message", { clientMsgId, serverMsgId, createdAt }),
+
+  markMessageFailed: (clientMsgId: string) =>
+    invoke<void>("mark_message_failed", { clientMsgId }),
+
+  /** 重试失败的消息：status 置回 sending（随后走正常 ack 回填） */
+  retryMessage: (clientMsgId: string) =>
+    invoke<void>("retry_message", { clientMsgId }),
+
+  /** 推进对端已读/送达水位（只前进不后退）并物化己方消息状态 */
+  setPeerWatermarks: (
+    conversationId: number,
+    readUpTo?: number,
+    deliveredUpTo?: number,
+  ) => invoke<void>("set_peer_watermarks", { conversationId, readUpTo, deliveredUpTo }),
 
   markRead: (conversationId: number) =>
     invoke<void>("mark_conversation_read", { conversationId }),

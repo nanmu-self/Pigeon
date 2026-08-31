@@ -50,6 +50,14 @@ class SocketManager {
   private socket: WsSocket | null = null;
   private intentionalClose = false;
   private latencyTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * 业务 handler 注册表：disconnect() 会 removeAllListeners，
+   * 重建连接后从这里重新绑定（保证跨重连/重登的生命周期）。
+   */
+  private handlerList: {
+    event: keyof ServerToClientEvents;
+    handler: ServerToClientEvents[keyof ServerToClientEvents];
+  }[] = [];
 
   /** 幂等连接：已连接/连接中时重复调用无效 */
   connect(): void {
@@ -69,6 +77,10 @@ class SocketManager {
       // 心跳与服务端 pingInterval/pingTimeout 对齐（默认值即 25s/20s）
     });
     this.socket = socket;
+    // 重新绑定业务 handler（跨重连/重登存活）
+    for (const { event, handler } of this.handlerList) {
+      socket.on(event, handler as never);
+    }
 
     socket.on('connect', () => {
       this.state = 'connected';
@@ -95,7 +107,7 @@ class SocketManager {
     });
   }
 
-  /** 主动断开（登出等场景） */
+  /** 主动断开（登出等场景）。业务 handler 保留，重连后自动重绑 */
   disconnect(): void {
     if (!this.socket) return;
     this.intentionalClose = true;
@@ -127,6 +139,10 @@ class SocketManager {
     event: K,
     handler: ServerToClientEvents[K],
   ): void {
+    this.handlerList = [
+      ...this.handlerList.filter((h) => h.event !== event || h.handler !== handler),
+      { event, handler },
+    ];
     this.typed()?.on(event, handler);
   }
 
@@ -134,6 +150,7 @@ class SocketManager {
     event: K,
     handler: ServerToClientEvents[K],
   ): void {
+    this.handlerList = this.handlerList.filter((h) => h.event !== event || h.handler !== handler);
     this.typed()?.off(event, handler);
   }
 
@@ -152,19 +169,31 @@ class SocketManager {
     return unwrapAck(res).joined;
   }
 
-  /** 发送消息，resolve 服务端生成的完整消息（含 id/createdAt）；失败 reject */
+  /**
+   * 发送消息，resolve 服务端生成的完整消息（含 id/createdAt）；失败 reject。
+   * clientMsgId 由调用方生成（UUID）：网络重试/多端同步时幂等去重。
+   */
   async sendMessage(
     conversationId: string,
     content: string,
     kind: WsChatMessage['kind'] = 'text',
+    clientMsgId?: string,
   ): Promise<WsChatMessage> {
     const socket = this.requireConnected();
     const res = await socket.emitWithAck('message:send', {
       conversationId,
       content,
       kind,
+      ...(clientMsgId ? { clientMsgId } : {}),
     });
     return unwrapAck(res);
+  }
+
+  /** 标记会话已读（服务端同时把已读回执推给对端） */
+  async markRead(conversationId: string): Promise<void> {
+    if (!this.socket?.connected) return; // 离线时静默跳过，打开会话后由 REST 补偿
+    const res = await this.socket.emitWithAck('message:read', { conversationId });
+    unwrapAck(res);
   }
 
   typingStart(conversationId: string, displayName?: string): void {

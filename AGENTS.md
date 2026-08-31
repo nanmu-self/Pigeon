@@ -13,16 +13,17 @@ Pigeon（鸽子）— 端到端加密即时通讯（IM）应用，monorepo：**T
 | 位置 | 内容 |
 |------|------|
 | `apps/desktop` | `@pigeon/desktop` — SvelteKit 2 + Svelte 5 + Tailwind 4 + shadcn-svelte 前端，Tauri 2 壳 |
-| `apps/desktop/src/lib/api/` | `config.ts`（SERVER_URL，读 `VITE_PIGEON_SERVER_URL`，默认 `localhost:3048`）、`http.ts`（alova 实例 + `tokenStore`）、`auth.ts`、`users.ts`（用户资料 GET/PATCH /users/me）、`storage.ts`（取七牛上传凭证）、`profile.svelte.ts`（全局用户资料 runes 状态，登录页/设置页/侧边栏共用）、`socket.svelte.ts`（Socket.IO 单例管理器，Svelte 5 runes） |
+| `apps/desktop/src/lib/api/` | `config.ts`（SERVER_URL，读 `VITE_PIGEON_SERVER_URL`，默认 `localhost:3048`）、`http.ts`（alova 实例 + `tokenStore`）、`auth.ts`、`users.ts`（用户资料 + 搜索）、`sessions.ts`（会话/历史/已读 REST + `serverTimeToMs`）、`friends.ts`（好友列表/申请/拉黑）、`storage.ts`（取七牛上传凭证）、`profile.svelte.ts`（全局用户资料 runes 状态）、`socket.svelte.ts`（Socket.IO 单例，handler 注册表跨重连存活，sendMessage 带 clientMsgId + markRead） |
+| `apps/desktop/src/lib/` | `chat.ts`（Tauri SQLite commands 封装 + 时间格式化）、`chat-store.svelte.ts`（聊天状态中枢：本地优先 → 服务端合并 → WS 已读/送达/新消息同步 → optimistic 发送） |
 | `apps/desktop/src/lib/upload/` | **七牛直传封装**：`qiniu.ts`（`uploadToQiniu()`：取票 → qiniu-js 直传 → 进度/取消）、`qiniu-js.d.ts`（qiniu-js@2.x 最小类型声明，SDK 本体不带 .d.ts） |
 | `apps/desktop/src/routes/(app)/` | 登录后的页面：`contacts/`（通讯录）、`messages/`（消息）、`files/`（文件，七牛直传完整演示）、`settings/`（设置：头像直传七牛 + 昵称修改） |
-| `apps/desktop/src-tauri/src/` | Rust 侧：`db.rs`（SQLite 连接 + `PRAGMA user_version` 嵌入式迁移 + WAL）、`commands.rs`（Tauri 命令薄封装）、`chat.rs`（SQL 逻辑，可单测）、`models.rs` |
+| `apps/desktop/src-tauri/src/` | Rust 侧：`db.rs`（SQLite + `PRAGMA user_version` 嵌入式迁移 v2 + WAL）、`commands.rs`（Tauri 命令薄封装）、`chat.rs`（SQL 逻辑，可单测：本地分页按 (created_at,id) 复合游标、服务端消息幂等合并、ack 回填、对端已读/送达水位物化）、`models.rs` |
 | `apps/server` | `@pigeon/server` — NestJS 12，**SWC 编译**，ESM（`"type": "module"`） |
 | `apps/server/src/auth/` | 注册/登录：`auth.controller.ts`（`POST /auth/register`、`POST /auth/login`）、`auth.service.ts`（bcryptjs cost 10 + JWT 签发）、`jwt-auth.guard.ts`（可复用 HTTP JWT 守卫，验证 `Authorization: Bearer` 后把 payload 挂到 `request.user`）、`dto.ts` |
 | `apps/server/src/storage/` | **七牛直传取票**：`qiniu.service.ts`（HMAC-SHA1 签上传凭证、`DIR_LIMITS` 目录限制、`makeKey()` 生成 key）、`storage.controller.ts`（`POST /storage/upload-token`，JwtAuthGuard 保护）、`config.ts`（`QINIU_*` 环境变量解析，未配置时接口 503）、`qiniu.service.spec.ts`（签名算法单测） |
 | `apps/server/src/users/` | 用户资料与搜索：`users.controller.ts`（`GET/PATCH /users/me`、`GET /users/search?q=`，JwtAuthGuard 保护）、`users.service.ts`（部分更新空入参 400；搜索 = 邮箱精确 + 昵称内存过滤，扫描上限 `SEARCH_SCAN_LIMIT`，量大后换 raw ILIKE）、`user.mapper.ts`（`UserRow` → `PublicUser` 共享映射，auth/friends/sessions 也复用）、`dto.ts`、`users.service.spec.ts` |
 | `apps/server/src/friends/` | 好友关系（状态机见 `friends.service.ts` 顶部注释）：申请/通过/拒绝/删除/拉黑/解除拉黑；REST `GET /friends`（含在线状态）、`GET /friends/requests`、`POST /friends/requests`、`POST /friends/requests/:id/accept|decline`、`DELETE /friends/:userId`、`POST /friends/:userId/block|unblock`；`assertFriends()` 是发消息/建会话的共享闸门（SessionsService 复用） |
-| `apps/server/src/sessions/` | 会话与消息：`sessions.service.ts`（好友间幂等建会话、发消息事务【消息 + 接收者回实行 + 会话活跃指针】、keyset 游标历史分页、已读水位 + WS 推已读回执）、`sessions.controller.ts`（`GET/POST /sessions`、`GET /sessions/:id/messages?cursor&limit`、`POST /sessions/:id/read`）、`sessions.mapper.ts`（`pgTimestampToMs` 等，有单测）、`dto.ts` |
+| `apps/server/src/sessions/` | 会话与消息：`sessions.service.ts`（好友间幂等建会话、发消息事务【消息 + 接收者回实行（含送达）+ 会话活跃指针】、keyset 游标历史分页 + 对端已读/送达水位、WS 推回执）、`sessions.controller.ts`（`GET/POST /sessions`、`GET /sessions/:id/messages?cursor&limit`、`POST /sessions/:id/read`）、`sessions.mapper.ts`（`pgTimestampToMs` 等，有单测）、`dto.ts` |
 | `apps/server/src/ws/` | `events.gateway.ts` — Socket.IO 网关：JWT 握手验签、房间 `user:{userId}` / `conversation:{convId}`、事件 ack；`message:send` 经 SessionsService 事务落库后推双方 user 房间，`message:read` 标记已读并推回执；`ws-events.service.ts` — 全局推送桥 + **presence 注册表**（`markOnline/markOffline/isOnline`，REST 侧据此返回在线状态） |
 | `apps/server/src/prisma/` | `prisma.service.ts` + `contract.prisma`（模型：`User`、`Session` 单聊会话【userAId<userBId 归一化 + 复合唯一】、`Message`【Int 自增游标 + clientMsgId 幂等】、`Friendship` 状态机、`MessageStatus` 每消息×每接收者回实行【复合主键】） |
 | `apps/server/src/config.ts` | `allowedOrigins()` — HTTP CORS 与 Socket.IO CORS 共用白名单，覆盖 Tauri 各平台 origin |
@@ -165,5 +166,6 @@ Rust 侧（Tauri invoke）：
 - ✅ 设置页：头像直传七牛（dir avatar）+ 昵称修改（PATCH /users/me），User 表新增 avatarUrl
 - ✅ 通讯录、消息界面（shadcn-svelte 组件）
 - ✅ 服务端好友关系（搜索/申请/通过/拉黑/删除 + 在线状态）、会话与消息落库（历史分页/未读数/已读回执）、WS 消息事务落库 —— e2e 覆盖（`test/chat.e2e-spec.ts`）
-- 🚧 E2EE 接入消息链路（密钥交换协议）；桌面端接入新 REST/WS 接口
+- ✅ 桌面端消息页接通服务端：会话列表（新聊天选好友建会话）、本地优先 + 异步合并缓存（v2 迁移：server_session_id/水位列/时间索引/server_msg_id 唯一）、optimistic 发送（sending→sent→delivered→read 状态机 + 失败重发）、WS 已读/送达/新消息实时同步
+- 🚧 E2EE 接入消息链路（密钥交换协议）；通讯录页接通好友接口
 - ⬜ 离线同步、多媒体消息、群聊、消息撤回/搜索、多设备漫游

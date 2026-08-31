@@ -179,11 +179,16 @@ export class SessionsService {
         ...(clientMsgId ? { clientMsgId } : {}),
       })) as MessageRow;
 
-      // fan-out 已读回实行：直接单聊只有对端一个接收者（发送者不建行）
+      // fan-out 已读回实行：直接单聊只有对端一个接收者（发送者不建行）；
+      // 对端在线 → 推送随即到达其设备，直接记送达
+      const delivered = this.ws.isOnline(String(peerId))
+        ? new Date().toISOString()
+        : null;
       await tx.orm.public.MessageStatus.create({
         messageId: row.id,
         userId: peerId,
         sessionId,
+        ...(delivered ? { deliveredAt: delivered } : {}),
       });
 
       // 会话活跃指针 → 会话列表排序/预览
@@ -191,12 +196,22 @@ export class SessionsService {
         lastMessageId: row.id,
         lastMessageAt: row.createdAt,
       });
-      return row;
+      return { row, delivered, peerId };
     });
 
-    const chatMessage = toChatMessage(message, senderName);
-    this.ws.toUser(String(peerId), 'message:new', chatMessage);
+    const chatMessage = toChatMessage(message.row, senderName);
+    this.ws.toUser(String(message.peerId), 'message:new', chatMessage);
     this.ws.toUser(String(senderId), 'message:new', chatMessage);
+
+    // 已送达 → 给发送方推送达回执（客户端展示 已发送/已送达/已读）
+    if (message.delivered) {
+      this.ws.toUser(String(senderId), 'message:delivered', {
+        conversationId: String(sessionId),
+        userId: String(message.peerId),
+        lastDeliveredMessageId: String(message.row.id),
+        deliveredAt: pgTimestampToMs(message.delivered),
+      });
+    }
     return chatMessage;
   }
 
@@ -234,6 +249,36 @@ export class SessionsService {
     return {
       messages: page.map((row) => toChatMessage(row, nameById.get(row.senderId ?? -1) ?? '')),
       hasMore,
+      ...await this.peerWatermarks(session, meId),
+    };
+  }
+
+  /**
+   * 对端已读/送达水位（单聊）：供打开会话时初始化本地渲染，
+   * 之后由 message:read / message:delivered 实时推送维护。
+   * 拉全量回实行在内存取最大值 —— 当前规模可接受；量大后换 SQL 聚合。
+   */
+  private async peerWatermarks(
+    session: SessionRow,
+    meId: number,
+  ): Promise<{ peerReadUpTo?: string; peerDeliveredUpTo?: string }> {
+    const peerId = session.userAId === meId ? session.userBId : session.userAId;
+    const rows = (await this.prisma.orm.public.MessageStatus
+      .where({ sessionId: session.id, userId: peerId })
+      .select('messageId', 'readAt', 'deliveredAt')
+      .all()) as Array<{ messageId: number; readAt: string | null; deliveredAt: string | null }>;
+
+    let readUpTo: number | null = null;
+    let deliveredUpTo: number | null = null;
+    for (const r of rows) {
+      if (r.readAt !== null && (readUpTo === null || r.messageId > readUpTo)) readUpTo = r.messageId;
+      if (r.deliveredAt !== null && (deliveredUpTo === null || r.messageId > deliveredUpTo)) {
+        deliveredUpTo = r.messageId;
+      }
+    }
+    return {
+      ...(readUpTo !== null ? { peerReadUpTo: String(readUpTo) } : {}),
+      ...(deliveredUpTo !== null ? { peerDeliveredUpTo: String(deliveredUpTo) } : {}),
     };
   }
 
@@ -251,9 +296,10 @@ export class SessionsService {
     const peerId = session.userAId === meId ? session.userBId : session.userAId;
 
     const readAt = new Date().toISOString();
+    // 已读意味着必已送达 → 同步回填送达时间
     await this.prisma.orm.public.MessageStatus
       .where({ sessionId, userId: meId, readAt: null })
-      .updateAll({ readAt });
+      .updateAll({ readAt, deliveredAt: readAt });
 
     // 已读水位 = 会话最新一条消息（fan-out 保证每条消息我都有回实行）
     const latest = (await this.prisma.orm.public.Message

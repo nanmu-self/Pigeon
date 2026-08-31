@@ -164,6 +164,10 @@ model MessageStatus {
 
   /// 阅读时间；NULL = 未读
   readAt TimestamptzString?
+  /// 送达时间（NULL = 未送达）：fan-out 时对端在线 → 推送成功即送达；
+  /// markRead 时回填（已读意味着必已送达）。对端离线暂不补标记，
+  /// 离线同步上线后再完善
+  deliveredAt TimestamptzString?
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id])

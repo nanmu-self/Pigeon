@@ -228,8 +228,12 @@ export interface SessionSummary {
 /** GET /sessions/:id/messages 响应：一页历史消息（按时间正序返回） */
 export interface MessageHistoryPage {
   messages: WsChatMessage[];
-  /** 是否还有更早的消息（拿最后一条的 id 作下一页 cursor） */
+  /** 是否还有更早的消息（拿本页最早一条的 id 作下一页 cursor） */
   hasMore: boolean;
+  /** 对端已读水位（已读的最大消息 id；单聊才有，无记录时缺省） */
+  peerReadUpTo?: string;
+  /** 对端送达水位（已送达的最大消息 id；单聊才有，无记录时缺省） */
+  peerDeliveredUpTo?: string;
 }
 
 /** message:read ack / POST /sessions/:id/read 响应 */
@@ -249,6 +253,16 @@ export interface WsReadReceipt {
   lastReadMessageId: string;
   /** Unix 毫秒 */
   readAt: number;
+}
+
+/** S2C 送达回执推送：消息已推到对方设备（对方在线即视为送达） */
+export interface WsDeliveredReceipt {
+  conversationId: string;
+  /** 收到消息的用户 id */
+  userId: string;
+  lastDeliveredMessageId: string;
+  /** Unix 毫秒 */
+  deliveredAt: number;
 }
 
 export interface WsTypingState {
@@ -274,6 +288,7 @@ export interface ServerToClientEvents {
   }) => void;
   'message:new': (payload: WsChatMessage) => void;
   'message:read': (payload: WsReadReceipt) => void;
+  'message:delivered': (payload: WsDeliveredReceipt) => void;
   'typing:update': (payload: WsTypingState) => void;
   'presence:update': (payload: WsPresenceState) => void;
   'friend:request': (payload: WsFriendRequest) => void;

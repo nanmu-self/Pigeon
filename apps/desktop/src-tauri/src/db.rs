@@ -90,5 +90,67 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    // v2：接入服务端同步 ——
+    //  1. conversations 增加服务端会话关联与对端已读/送达水位；
+    //  2. messages 重建：status 增加 delivered（SQLite 无法修改 CHECK），
+    //     server_msg_id 唯一部分索引（合并去重），
+    //     (conversation_id, created_at, id) 索引（异步合并后本地 id 顺序 ≠
+    //     时间顺序，查询改按时间走此索引，即「sessionId + timestamp」索引）。
+    if version < 2 {
+        conn.execute_batch(
+            r#"
+            BEGIN;
+
+            ALTER TABLE conversations ADD COLUMN server_session_id TEXT;
+            ALTER TABLE conversations ADD COLUMN peer_read_msg_id INTEGER;
+            ALTER TABLE conversations ADD COLUMN peer_delivered_msg_id INTEGER;
+            -- 本端已读时间戳：未读计数按时间比较（合并回填的历史消息不算未读）
+            ALTER TABLE conversations ADD COLUMN last_read_at INTEGER;
+
+            -- 同一服务端会话至多映射一个本地会话
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_session
+                ON conversations(server_session_id) WHERE server_session_id IS NOT NULL;
+
+            -- 重建 messages：扩 CHECK + 唯一索引 + 时间索引一步到位
+            CREATE TABLE messages_v2 (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id INTEGER NOT NULL
+                                REFERENCES conversations(id) ON DELETE CASCADE,
+                sender          TEXT    NOT NULL
+                                CHECK (sender IN ('self', 'other', 'system')),
+                sender_name     TEXT    NOT NULL DEFAULT '',
+                kind            TEXT    NOT NULL DEFAULT 'text'
+                                CHECK (kind IN ('text', 'image', 'file', 'system')),
+                content         TEXT    NOT NULL,
+                client_msg_id   TEXT,
+                server_msg_id   TEXT,
+                status          TEXT    NOT NULL DEFAULT 'sent'
+                                CHECK (status IN ('sending', 'sent', 'delivered', 'failed', 'read')),
+                created_at      INTEGER NOT NULL
+            );
+            INSERT INTO messages_v2
+                (id, conversation_id, sender, sender_name, kind, content,
+                 client_msg_id, server_msg_id, status, created_at)
+            SELECT id, conversation_id, sender, sender_name, kind, content,
+                   client_msg_id, server_msg_id, status, created_at
+            FROM messages;
+            DROP TABLE messages;
+            ALTER TABLE messages_v2 RENAME TO messages;
+
+            -- 服务端消息 id 唯一：WS 推送 / 历史合并 / 多端同步幂等去重
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_server
+                ON messages(server_msg_id) WHERE server_msg_id IS NOT NULL;
+
+            -- 会话内按时间排序/分页（异步合并乱序插入后不再依赖自增 id）
+            CREATE INDEX IF NOT EXISTS idx_messages_conv_time
+                ON messages(conversation_id, created_at, id);
+
+            PRAGMA user_version = 2;
+
+            COMMIT;
+            "#,
+        )?;
+    }
+
     Ok(())
 }

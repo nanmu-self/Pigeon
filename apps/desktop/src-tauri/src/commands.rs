@@ -62,16 +62,31 @@ pub fn clear_history(state: State<Db>, conversation_id: i64) -> Result<(), Strin
 
 // ── 消息 ─────────────────────────────────────────────────────
 
-/// 拉取消息（keyset 分页，时间正序；传 beforeId 上滑加载更早历史）
+/// 拉取消息（keyset 分页，时间正序；传 beforeCreatedAt+beforeId 上滑加载更早历史）
 #[tauri::command]
 pub fn get_messages(
     state: State<Db>,
     conversation_id: i64,
     limit: Option<i64>,
+    before_created_at: Option<i64>,
     before_id: Option<i64>,
 ) -> Result<Vec<ChatMessage>, String> {
     let conn = lock(&state)?;
-    chat::get_messages(&conn, conversation_id, limit, before_id).map_err(|e| e.to_string())
+    chat::get_messages(&conn, conversation_id, limit, before_created_at, before_id)
+        .map_err(|e| e.to_string())
+}
+
+/// 确保存在与服务端会话关联的本地会话（无则创建，幂等）
+#[tauri::command]
+pub fn ensure_conversation(
+    state: State<Db>,
+    server_session_id: String,
+    peer_id: String,
+    peer_name: String,
+) -> Result<Conversation, String> {
+    let conn = lock(&state)?;
+    chat::ensure_conversation(&conn, &server_session_id, &peer_id, &peer_name)
+        .map_err(|e| e.to_string())
 }
 
 /// 通用写入消息（接收方 / 同步路径复用；前端发送走 send_message）
@@ -105,16 +120,21 @@ pub fn insert_message(
     chat::insert_message(&conn, msg).map_err(|e| e.to_string())
 }
 
-/// 当前用户发送文本消息
+/// 当前用户发送文本消息（optimistic：先落 sending 占位行，客户端拿
+/// clientMsgId 在 WS ack 后调 acknowledge_message 回填；失败调 mark_message_failed）
 #[tauri::command]
 pub fn send_message(
     state: State<Db>,
     conversation_id: i64,
     content: String,
+    client_msg_id: String,
 ) -> Result<ChatMessage, String> {
     let content = content.trim();
     if content.is_empty() {
         return Err("消息内容不能为空".into());
+    }
+    if client_msg_id.trim().is_empty() {
+        return Err("client_msg_id 不能为空".into());
     }
 
     let msg = NewMessage {
@@ -123,12 +143,62 @@ pub fn send_message(
         sender_name: String::new(),
         kind: MSG_TEXT.to_string(),
         content: content.to_string(),
-        client_msg_id: None,
-        status: STATUS_SENT.to_string(),
+        client_msg_id: Some(client_msg_id),
+        status: STATUS_SENDING.to_string(),
     };
 
     let conn = lock(&state)?;
     chat::insert_message(&conn, msg).map_err(|e| e.to_string())
+}
+
+/// 合并一条服务端已落库的消息（历史拉取 / WS message:new 共用，幂等）
+#[tauri::command]
+pub fn upsert_server_message(
+    state: State<Db>,
+    message: ServerMessage,
+) -> Result<MergeResult, String> {
+    let conn = lock(&state)?;
+    chat::upsert_server_message(&conn, &message).map_err(|e| e.to_string())
+}
+
+/// 发送方 ack：占位行回填服务端 id/时间（幂等）
+#[tauri::command]
+pub fn acknowledge_message(
+    state: State<Db>,
+    client_msg_id: String,
+    server_msg_id: String,
+    created_at: i64,
+) -> Result<ChatMessage, String> {
+    let conn = lock(&state)?;
+    chat::acknowledge_message(&conn, &client_msg_id, &server_msg_id, created_at)
+        .map_err(|e| e.to_string())
+}
+
+/// 标记发送失败
+#[tauri::command]
+pub fn mark_message_failed(state: State<Db>, client_msg_id: String) -> Result<(), String> {
+    let conn = lock(&state)?;
+    chat::mark_message_failed(&conn, &client_msg_id).map_err(|e| e.to_string())
+}
+
+/// 重试失败的消息：status 置回 sending（随后走正常 ack 回填流程）
+#[tauri::command]
+pub fn retry_message(state: State<Db>, client_msg_id: String) -> Result<(), String> {
+    let conn = lock(&state)?;
+    chat::retry_message(&conn, &client_msg_id).map_err(|e| e.to_string())
+}
+
+/// 推进对端已读/送达水位（只前进不后退）并物化己方消息状态
+#[tauri::command]
+pub fn set_peer_watermarks(
+    state: State<Db>,
+    conversation_id: i64,
+    read_up_to: Option<i64>,
+    delivered_up_to: Option<i64>,
+) -> Result<(), String> {
+    let conn = lock(&state)?;
+    chat::set_peer_watermarks(&conn, conversation_id, read_up_to, delivered_up_to)
+        .map_err(|e| e.to_string())
 }
 
 /// 删除单条消息

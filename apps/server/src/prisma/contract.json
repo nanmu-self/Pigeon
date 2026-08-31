@@ -382,6 +382,13 @@
           },
           "MessageStatus": {
             "fields": {
+              "deliveredAt": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "kind": "scalar"
+                }
+              },
               "messageId": {
                 "nullable": false,
                 "type": {
@@ -460,6 +467,9 @@
             },
             "storage": {
               "fields": {
+                "deliveredAt": {
+                  "column": "deliveredAt"
+                },
                 "messageId": {
                   "column": "messageId"
                 },
@@ -1077,6 +1087,11 @@
             },
             "messageStatus": {
               "columns": {
+                "deliveredAt": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "nativeType": "timestamptz",
+                  "nullable": true
+                },
                 "messageId": {
                   "codecId": "pg/int4@1",
                   "nativeType": "int4",
@@ -1416,7 +1431,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "37d533050215b4c62589f7c14d67c4ae277d4324e5cd84ba833e69fad794e5d9"
+    "storageHash": "5c8716a46931f99c0beacedc99c351d7e0e0bd3f55c7f664a1b19aaa8febdf12"
   },
   "execution": {
     "executionHash": "410b14ad278f3c4f2ef1b7e0e449ed69d4d5505a49d36e38af1c0be620f3c1f5",

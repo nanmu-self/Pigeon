@@ -218,8 +218,13 @@ describe('聊天链路 (e2e)', () => {
       .send({ peerId: alice.user.id });
     expect((again.body as SessionSummary).id).toBe(sessionId);
 
-    // 发消息：ack 带服务端 id；bob 实时收到 message:new
+    // 发消息：ack 带服务端 id；bob 实时收到 message:new；
+    // bob 在线 → alice 应收到 message:delivered 送达回执
     const received = waitFor<WsChatMessage>(socketBob, 'message:new');
+    const delivered = waitFor<{ conversationId: string; lastDeliveredMessageId: string }>(
+      socketAlice,
+      'message:delivered',
+    );
     const sent = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
       conversationId: sessionId,
       content: '你好，Bob！',
@@ -230,6 +235,7 @@ describe('聊天链路 (e2e)', () => {
     expect(Number(sent.data?.id)).toBeGreaterThan(0);
     const firstMessage = sent.data as WsChatMessage;
     expect((await received).id).toBe(firstMessage.id);
+    expect((await delivered).lastDeliveredMessageId).toBe(firstMessage.id);
 
     // bob 未读数 = 1；会话列表带最后一条消息预览
     const bobSessions = await api.get('/sessions').auth(bob.token, { type: 'bearer' });
@@ -273,6 +279,14 @@ describe('聊天链路 (e2e)', () => {
     expect(got.conversationId).toBe(sessionId);
     expect(got.userId).toBe(String(bob.user.id));
     expect(got.lastReadMessageId).toBe(readAck.data?.lastReadMessageId);
+
+    // 历史接口带出对端水位（alice 视角：bob 已读到最新一条）
+    const history = await api
+      .get(`/sessions/${sessionId}/messages?limit=1`)
+      .auth(alice.token, { type: 'bearer' });
+    const page = history.body as MessageHistoryPage;
+    expect(page.peerReadUpTo).toBe(readAck.data?.lastReadMessageId);
+    expect(page.peerDeliveredUpTo).toBe(readAck.data?.lastReadMessageId); // 已读回填送达
 
     // 未读清零；REST 已读接口同样可用（幂等）
     const bobSessions = await api.get('/sessions').auth(bob.token, { type: 'bearer' });
