@@ -1,7 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { chat } from "$lib/chat-store.svelte";
-  import { formatConvTime, formatMsgTime, type ChatMessage } from "$lib/chat";
+  import {
+    formatConvTime,
+    formatMsgTime,
+    formatBytes,
+    parseMessageMeta,
+    type ChatMessage,
+  } from "$lib/chat";
   import { serverTimeToMs as pgTimeToMs } from "$lib/api/sessions";
 
   let draft = $state("");
@@ -9,6 +15,8 @@
   let searchQuery = $state("");
   let pickerOpen = $state(false);
   let creating = $state(false);
+  let imageInput: HTMLInputElement | undefined = $state();
+  let fileInput: HTMLInputElement | undefined = $state();
 
   async function pickFriend(peerId: number) {
     creating = true;
@@ -17,6 +25,28 @@
       pickerOpen = false;
     } finally {
       creating = false;
+    }
+  }
+
+  function onPickImage(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) void chat.sendAttachment(file);
+    input.value = ""; // 允许重复选择同一文件
+  }
+
+  function onPickFile(e: Event) {
+    const input = e.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (file) void chat.sendAttachment(file);
+    input.value = "";
+  }
+
+  async function copyUrl(msg: ChatMessage) {
+    try {
+      await navigator.clipboard.writeText(msg.content);
+    } catch {
+      /* 剪贴板权限失败时静默 */
     }
   }
 
@@ -238,6 +268,47 @@
           <div class="mb-3 flex {msg.sender === 'self' ? 'justify-end' : 'justify-start'}">
             {#if msg.sender === 'system'}
               <span class="rounded-full bg-[var(--p-muted)] px-3 py-1 text-xs text-[var(--p-muted-fg)]">{msg.content}</span>
+            {:else if msg.kind === 'image'}
+              <!-- 图片消息：七牛外链直接预览 -->
+              <div class="max-w-[70%]">
+                <img
+                  src={msg.content}
+                  alt={parseMessageMeta(msg.meta).fname ?? '图片'}
+                  class="max-h-[240px] max-w-full cursor-pointer rounded-xl border border-[var(--p-border)] object-contain"
+                  title="点击复制链接"
+                  onclick={() => void copyUrl(msg)}
+                />
+                <div class="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-[var(--p-muted-fg)] {msg.sender === 'self' ? 'justify-end' : ''}">
+                  {#if msg.sender === 'self'}{@render statusTicks(msg)}{/if}
+                  <span>{formatMsgTime(msg.createdAt)}</span>
+                </div>
+              </div>
+            {:else if msg.kind === 'file'}
+              <!-- 文件消息：文件卡片 -->
+              {@const meta = parseMessageMeta(msg.meta)}
+              <div
+                class="flex max-w-[70%] items-center gap-3 rounded-xl border border-[var(--p-border)] bg-[var(--p-card)] px-3.5 py-2.5 {msg.sender === 'self' ? 'rounded-br-sm' : 'rounded-bl-sm'}"
+                title={msg.content}
+              >
+                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--p-primary-muted)]">
+                  <svg class="h-4.5 w-4.5 text-[var(--p-primary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                </div>
+                <div class="min-w-0">
+                  <p class="max-w-[220px] truncate text-sm font-medium text-[var(--p-fg)]">{meta.fname ?? '文件'}</p>
+                  <p class="text-xs text-[var(--p-muted-fg)]">{formatBytes(meta.size ?? 0)} · 点击复制链接</p>
+                </div>
+                <button
+                  class="shrink-0 rounded p-1.5 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
+                  title="复制链接"
+                  onclick={() => void copyUrl(msg)}
+                >
+                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                </button>
+              </div>
+              <div class="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-[var(--p-muted-fg)]">
+                {#if msg.sender === 'self'}{@render statusTicks(msg)}{/if}
+                <span>{formatMsgTime(msg.createdAt)}</span>
+              </div>
             {:else}
               <div
                 class="group max-w-[70%] rounded-2xl px-3.5 py-2 {msg.sender === 'self'
@@ -257,7 +328,41 @@
 
       <!-- 输入区 -->
       <div class="border-t border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3">
+        <!-- 七牛上传进度（进行中显示，可取消） -->
+        {#if chat.uploadProgress}
+          <div class="mb-2 flex items-center gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-muted)]/40 px-3 py-1.5">
+            <svg class="h-3.5 w-3.5 shrink-0 animate-spin text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+            <span class="min-w-0 flex-1 truncate text-xs text-[var(--p-fg)]">上传 {chat.uploadProgress.fname}</span>
+            <div class="h-1.5 w-24 overflow-hidden rounded-full bg-[var(--p-muted)]">
+              <div class="h-full rounded-full bg-[var(--p-primary)] transition-all" style="width: {chat.uploadProgress.percent}%"></div>
+            </div>
+            <span class="w-9 text-right text-xs tabular-nums text-[var(--p-muted-fg)]">{chat.uploadProgress.percent}%</span>
+            <button
+              class="text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
+              onclick={() => chat.cancelUpload()}
+            >取消</button>
+          </div>
+        {/if}
         <div class="flex items-end gap-2">
+          <!-- 图片 / 文件附件（七牛直传，dir=chat） -->
+          <input type="file" accept="image/*" class="hidden" bind:this={imageInput} onchange={onPickImage} />
+          <input type="file" class="hidden" bind:this={fileInput} onchange={onPickFile} />
+          <button
+            class="flex h-[38px] w-[38px] items-center justify-center rounded-lg text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
+            title="发送图片"
+            disabled={!!chat.uploadProgress}
+            onclick={() => imageInput?.click()}
+          >
+            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+          </button>
+          <button
+            class="flex h-[38px] w-[38px] items-center justify-center rounded-lg text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
+            title="发送文件"
+            disabled={!!chat.uploadProgress}
+            onclick={() => fileInput?.click()}
+          >
+            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+          </button>
           <textarea
             bind:value={draft}
             onkeydown={onKeydown}
@@ -267,7 +372,7 @@
           ></textarea>
           <button
             onclick={() => void submit()}
-            disabled={!draft.trim()}
+            disabled={!draft.trim() || !!chat.uploadProgress}
             class="flex h-[38px] items-center gap-1.5 rounded-lg bg-[var(--p-primary)] px-4 text-sm font-medium text-[var(--p-primary-fg)] transition-opacity disabled:opacity-50"
           >
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>

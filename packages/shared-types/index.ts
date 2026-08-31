@@ -157,6 +157,11 @@ export interface WsChatMessage {
   senderName: string;
   kind: 'text' | 'image' | 'file' | 'system';
   content: string;
+  /**
+   * 附加信息（image/file 消息）：{ fname, size, mime, ... }；
+   * E2EE 接入后可携带加密信封。服务端不解析，透传存储。
+   */
+  meta?: Record<string, unknown> | null;
   /** Unix 毫秒时间戳 */
   createdAt: number;
 }
@@ -312,6 +317,8 @@ export interface ClientToServerEvents {
       kind?: WsChatMessage['kind'];
       /** 客户端幂等键（UUID）：重试重发不会产生重复消息 */
       clientMsgId?: string;
+      /** image/file 消息的附加信息（fname/size/mime），≤4KB 的 JSON 对象 */
+      meta?: Record<string, unknown>;
     },
     ack: WsAckCallback<WsChatMessage>,
   ) => void;

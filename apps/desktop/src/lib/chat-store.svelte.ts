@@ -23,10 +23,11 @@ import type {
   WsDeliveredReceipt,
   WsReadReceipt,
 } from '@pigeon/shared-types';
-import { chatApi, type ChatMessage, type Conversation } from '$lib/chat';
+import { chatApi, type ChatMessage, type Conversation, type MessageKind } from '$lib/chat';
 import { sessionsApi } from '$lib/api/sessions';
 import { friendsApi } from '$lib/api/friends';
 import { ws } from '$lib/api/socket.svelte';
+import { uploadToQiniu, isUploadCanceled } from '$lib/upload/qiniu';
 
 /** 每次从服务端拉取的历史页大小 */
 const HISTORY_PAGE_SIZE = 30;
@@ -50,6 +51,8 @@ export class ChatStore {
   loadingOlder = $state(false);
   syncing = $state(false);
   error = $state<string | null>(null);
+  /** 进行中的七牛上传（输入区进度条；null = 无进行中上传） */
+  uploadProgress = $state<{ fname: string; percent: number } | null>(null);
 
   /** 最近一次服务端拉取页的最早一条消息 id（上滑加载的游标） */
   private oldestFetchedServerId: string | null = null;
@@ -169,6 +172,7 @@ export class ChatStore {
         kind: m.kind,
         content: m.content,
         createdAt: m.createdAt,
+        meta: m.meta ? JSON.stringify(m.meta) : undefined,
       });
     }
   }
@@ -178,20 +182,86 @@ export class ChatStore {
   async send(content: string): Promise<void> {
     const text = content.trim();
     if (!text || !this.current || !this.localConversation) return;
+    await this.stageAndSend('text', text, undefined);
+  }
 
+  /**
+   * 发送图片/文件消息：先直传七牛（dir=chat），完成后按
+   * content=url、meta={fname,size,mime} 走正常发送链路。
+   * 进度实时写入 uploadProgress；可取消（取消不产生任何消息）。
+   */
+  async sendAttachment(file: File): Promise<void> {
+    if (!this.current || !this.localConversation) return;
+    const kind: MessageKind = file.type.startsWith('image/') ? 'image' : 'file';
+    const meta = {
+      fname: file.name,
+      size: file.size,
+      mime: file.type || 'application/octet-stream',
+    };
     const clientMsgId = crypto.randomUUID();
-    // 1. optimistic：立即落 sending 占位行并上屏
-    const staged = await chatApi.sendMessage(this.localConversation.id, text, clientMsgId);
-    this.messages = [...this.messages, staged];
 
-    await this.dispatch(clientMsgId, text);
+    this.uploadProgress = { fname: file.name, percent: 0 };
+    const handle = uploadToQiniu(file, {
+      dir: 'chat',
+      fileName: file.name,
+      onProgress: (p) => {
+        this.uploadProgress = { fname: file.name, percent: p.percent };
+      },
+    });
+    this.activeUpload = { clientMsgId, cancel: () => handle.cancel() };
+
+    try {
+      const up = await handle.done;
+      this.uploadProgress = null;
+      await this.stageAndSend(kind, up.url, meta, clientMsgId);
+      this.error = null;
+    } catch (e) {
+      this.uploadProgress = null;
+      // 用户主动取消：静默（不产生消息）；真错误才提示
+      if (!isUploadCanceled(e)) {
+        this.error = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      this.activeUpload = null;
+    }
+  }
+
+  cancelUpload(): void {
+    this.activeUpload?.cancel();
+  }
+
+  private activeUpload: { clientMsgId: string; cancel: () => void } | null = null;
+
+  /** 落 sending 占位行并走 WS 发送链路 */
+  private async stageAndSend(
+    kind: MessageKind,
+    content: string,
+    meta?: Record<string, unknown>,
+    clientMsgId: string = crypto.randomUUID(),
+  ): Promise<void> {
+    if (!this.current || !this.localConversation) return;
+    const staged = await chatApi.sendMessage(
+      this.localConversation.id,
+      content,
+      clientMsgId,
+      kind,
+      meta ? JSON.stringify(meta) : undefined,
+    );
+    this.messages = [...this.messages, staged];
+    await this.dispatch(clientMsgId, content, kind, meta);
   }
 
   /** WS 发送；ack 后回填服务端 id/时间 → sent；失败置 failed */
-  private async dispatch(clientMsgId: string, text: string): Promise<void> {
-    if (!this.current) return;
+  private async dispatch(
+    clientMsgId: string,
+    content: string,
+    kind: MessageKind,
+    meta?: Record<string, unknown>,
+  ): Promise<void> {
+    const current = this.current;
+    if (!current) return;
     try {
-      const ack = await ws.sendMessage(this.current.id, text, 'text', clientMsgId);
+      const ack = await ws.sendMessage(current.id, content, kind, clientMsgId);
       const confirmed = await chatApi.acknowledgeMessage(clientMsgId, ack.id, ack.createdAt);
       this.replaceLocal(confirmed);
       this.error = null;
@@ -208,7 +278,15 @@ export class ChatStore {
     if (!msg.clientMsgId) return;
     await chatApi.retryMessage(msg.clientMsgId);
     this.patchStatus(msg.clientMsgId, 'sending');
-    await this.dispatch(msg.clientMsgId, msg.content);
+    let meta: Record<string, unknown> | undefined;
+    if (msg.meta) {
+      try {
+        meta = JSON.parse(msg.meta) as Record<string, unknown>;
+      } catch {
+        meta = undefined;
+      }
+    }
+    await this.dispatch(msg.clientMsgId, msg.content, msg.kind, meta);
   }
 
   // ── 已读 ─────────────────────────────────────────────────
@@ -256,6 +334,7 @@ export class ChatStore {
       kind: m.kind,
       content: m.content,
       createdAt: m.createdAt,
+      meta: m.meta ? JSON.stringify(m.meta) : undefined,
     });
 
     if (this.current?.id === m.conversationId) {

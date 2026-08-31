@@ -55,6 +55,8 @@ export interface ServerMessageInput {
   /** 服务端时间（Unix 毫秒）—— 本地排序的权威时间 */
   createdAt: number;
   clientMsgId?: string;
+  /** 附加信息（JSON 字符串） */
+  meta?: string;
 }
 
 export interface ChatMessage {
@@ -65,6 +67,8 @@ export interface ChatMessage {
   kind: MessageKind;
   content: string;
   status: MessageStatus;
+  /** image/file 附加信息（JSON 字符串：fname/size/mime…）；文本消息为空 */
+  meta: string | null;
   /** 本机发送的占位键（重发/状态回填关联键；接收消息为空） */
   clientMsgId: string | null;
   /** Unix 毫秒时间戳 */
@@ -96,8 +100,20 @@ export const chatApi = {
     }),
 
   /** optimistic 发送：先落 sending 占位行，ack 后 acknowledge 回填 */
-  sendMessage: (conversationId: number, content: string, clientMsgId: string) =>
-    invoke<ChatMessage>("send_message", { conversationId, content, clientMsgId }),
+  sendMessage: (
+    conversationId: number,
+    content: string,
+    clientMsgId: string,
+    kind: MessageKind = "text",
+    meta?: string,
+  ) =>
+    invoke<ChatMessage>("send_message", {
+      conversationId,
+      content,
+      clientMsgId,
+      kind,
+      meta,
+    }),
 
   /** 合并一条服务端消息（幂等：WS 推送 / 历史拉取共用） */
   upsertServerMessage: (message: ServerMessageInput) =>
@@ -136,6 +152,27 @@ export const chatApi = {
   searchMessages: (conversationId: number, query: string, limit?: number) =>
     invoke<ChatMessage[]>("search_messages", { conversationId, query, limit }),
 };
+
+// ── 附件 ─────────────────────────────────────────────────────
+
+/** 消息行 meta（JSON 字符串）安全解析 */
+export function parseMessageMeta(meta: string | null): { fname?: string; size?: number; mime?: string } {
+  if (!meta) return {};
+  try {
+    return JSON.parse(meta) as { fname?: string; size?: number; mime?: string };
+  } catch {
+    return {};
+  }
+}
+
+/** 字节数可读化 */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
 
 // ── 时间格式化 ───────────────────────────────────────────────
 

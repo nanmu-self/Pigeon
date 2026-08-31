@@ -206,10 +206,11 @@ export class EventsGateway
       content: string;
       kind?: WsChatMessage['kind'];
       clientMsgId?: string;
+      meta?: Record<string, unknown>;
     },
     ack?: Ack<WsChatMessage>,
   ): Promise<void> {
-    const { conversationId, content, kind, clientMsgId } = payload;
+    const { conversationId, content, kind, clientMsgId, meta } = payload;
     if (!conversationId || !content?.trim()) {
       ack?.({ ok: false, error: 'conversationId and content are required' });
       return;
@@ -237,6 +238,7 @@ export class EventsGateway
         content,
         kind: kind ?? 'text',
         ...(clientMsgId ? { clientMsgId } : {}),
+        ...(meta ? { meta } : {}),
       });
       // 先 ack（发送方获得回执）；message:new 由服务层推给双方所有设备
       ack?.({ ok: true, data: message });

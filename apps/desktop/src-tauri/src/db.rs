@@ -152,5 +152,20 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    // v3：图片/文件消息 —— meta 附加信息（JSON 字符串：fname/size/mime 等）
+    if version < 3 {
+        conn.execute_batch(
+            r#"
+            BEGIN;
+
+            ALTER TABLE messages ADD COLUMN meta TEXT;
+
+            PRAGMA user_version = 3;
+
+            COMMIT;
+            "#,
+        )?;
+    }
+
     Ok(())
 }

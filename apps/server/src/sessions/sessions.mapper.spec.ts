@@ -35,6 +35,7 @@ describe('toChatMessage', () => {
       senderId: 3,
       kind: 'text' as const,
       content: 'hello',
+      meta: null,
       clientMsgId: null,
       createdAt: '2026-08-31 16:13:26.170714+00',
     };
@@ -46,6 +47,7 @@ describe('toChatMessage', () => {
       senderName: 'Alice',
       kind: 'text',
       content: 'hello',
+      meta: null,
       createdAt: Date.parse('2026-08-31T16:13:26.170714Z'),
     });
   });
@@ -57,6 +59,7 @@ describe('toChatMessage', () => {
       senderId: null,
       kind: 'system' as const,
       content: '欢迎',
+      meta: null,
       clientMsgId: null,
       createdAt: '2026-08-31 16:13:26+00',
     };

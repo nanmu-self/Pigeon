@@ -93,6 +93,8 @@ pub struct NewMessage {
     /// 接入服务端同步后用于幂等去重（唯一索引已建）
     pub client_msg_id: Option<String>,
     pub status: String,
+    /// image/file 附加信息（JSON 字符串）
+    pub meta: Option<String>,
 }
 
 /// 聊天消息
@@ -109,6 +111,8 @@ pub struct ChatMessage {
     pub content: String,
     /// sending | sent | delivered | failed | read
     pub status: String,
+    /// image/file 附加信息（JSON 字符串：fname/size/mime…）；文本消息为空
+    pub meta: Option<String>,
     /// 本机发送的 optimistic 占位键（发送/重发/状态回填的关联键；接收消息为空）
     pub client_msg_id: Option<String>,
     /// Unix 毫秒时间戳
@@ -130,6 +134,8 @@ pub struct ServerMessage {
     pub created_at: i64,
     /// 本机发出的消息带此字段（与 optimistic 占位行关联）
     pub client_msg_id: Option<String>,
+    /// 附加信息（JSON 字符串）
+    pub meta: Option<String>,
 }
 
 /// 合并结果：inserted = false 表示本地已有（幂等跳过或占位行补全）

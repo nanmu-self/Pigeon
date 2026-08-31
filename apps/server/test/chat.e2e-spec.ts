@@ -255,6 +255,20 @@ describe('聊天链路 (e2e)', () => {
     const bobSessions2 = await api.get('/sessions').auth(bob.token, { type: 'bearer' });
     expect((bobSessions2.body as SessionSummary[]).find((s) => s.id === sessionId)?.unreadCount).toBe(1);
 
+    // 图片消息：meta（七牛上传信息）随消息透传，接收方实时收到且历史可回读
+    const imageReceived = waitFor<WsChatMessage>(socketBob, 'message:new');
+    const imageSent = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+      conversationId: sessionId,
+      content: 'http://localhost:7600/pigeon/chat/2026/08/abc.png',
+      kind: 'image',
+      meta: { fname: 'cat.png', size: 20480, mime: 'image/png' },
+      clientMsgId: 'e2e-img-1',
+    });
+    expect(imageSent.ok).toBe(true);
+    expect(imageSent.data?.kind).toBe('image');
+    expect(imageSent.data?.meta).toMatchObject({ fname: 'cat.png', mime: 'image/png' });
+    expect((await imageReceived).meta).toMatchObject({ fname: 'cat.png' });
+
     void socketBob;
     await socketAlice.disconnect();
     await socketBob.disconnect();
@@ -333,13 +347,18 @@ describe('聊天链路 (e2e)', () => {
     expect(p1.messages.map((m) => m.content)).toEqual(['消息 3', '消息 4', '消息 5']);
     expect(p1.hasMore).toBe(true);
 
-    // 用本页最早一条的 id 作游标往前翻
+    // 用本页最早一条的 id 作游标往前翻（共 6 条：你好Bob + 图片 + 消息2..5）
     const cursor = p1.messages[0].id;
     const page2 = await api
       .get(`/sessions/${sessionId}/messages?limit=3&cursor=${cursor}`)
       .auth(bob.token, { type: 'bearer' });
     const p2 = page2.body as MessageHistoryPage;
-    expect(p2.messages.map((m) => m.content)).toEqual(['你好，Bob！', '消息 2']);
+    expect(p2.messages.map((m) => m.content)).toEqual([
+      '你好，Bob！',
+      'http://localhost:7600/pigeon/chat/2026/08/abc.png',
+      '消息 2',
+    ]);
+    expect(p2.messages.find((m) => m.kind === 'image')?.meta).toMatchObject({ fname: 'cat.png' });
     expect(p2.hasMore).toBe(false);
   });
 

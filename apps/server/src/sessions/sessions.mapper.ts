@@ -7,6 +7,7 @@ export interface MessageRow {
   senderId: number | null;
   kind: 'text' | 'image' | 'file' | 'system';
   content: string;
+  meta: unknown;
   clientMsgId: string | null;
   createdAt: string;
 }
@@ -40,6 +41,7 @@ export function toChatMessage(row: MessageRow, senderName: string): WsChatMessag
     senderName,
     kind: row.kind,
     content: row.content,
+    meta: (row.meta as Record<string, unknown> | null) ?? null,
     createdAt: pgTimestampToMs(row.createdAt),
   };
 }

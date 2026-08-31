@@ -99,6 +99,7 @@ pub fn insert_message(
     sender_name: Option<String>,
     kind: Option<String>,
     client_msg_id: Option<String>,
+    meta: Option<String>,
     status: Option<String>,
 ) -> Result<ChatMessage, String> {
     let content = content.trim();
@@ -113,6 +114,7 @@ pub fn insert_message(
         kind: kind.unwrap_or_else(|| MSG_TEXT.to_string()),
         content: content.to_string(),
         client_msg_id,
+        meta,
         status: status.unwrap_or_else(|| STATUS_SENT.to_string()),
     };
 
@@ -128,6 +130,8 @@ pub fn send_message(
     conversation_id: i64,
     content: String,
     client_msg_id: String,
+    kind: Option<String>,
+    meta: Option<String>,
 ) -> Result<ChatMessage, String> {
     let content = content.trim();
     if content.is_empty() {
@@ -136,14 +140,19 @@ pub fn send_message(
     if client_msg_id.trim().is_empty() {
         return Err("client_msg_id 不能为空".into());
     }
+    let kind = kind.unwrap_or_else(|| MSG_TEXT.to_string());
+    if kind != MSG_TEXT && kind != MSG_IMAGE && kind != MSG_FILE {
+        return Err(format!("非法消息类型: {kind}"));
+    }
 
     let msg = NewMessage {
         conversation_id,
         sender: SENDER_SELF.to_string(),
         sender_name: String::new(),
-        kind: MSG_TEXT.to_string(),
+        kind,
         content: content.to_string(),
         client_msg_id: Some(client_msg_id),
+        meta,
         status: STATUS_SENDING.to_string(),
     };
 

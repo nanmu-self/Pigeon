@@ -32,7 +32,12 @@ export interface SendMessageParams {
   content: string;
   kind: WsChatMessage['kind'];
   clientMsgId?: string;
+  /** image/file 的附加信息（fname/size/mime…），服务端不解析透传存储 */
+  meta?: Record<string, unknown>;
 }
+
+/** meta 序列化后的字节上限 */
+const MAX_META_LENGTH = 4096;
 
 /** 文本消息长度上限（与网关 maxHttpBufferSize 1MB 拉开距离，防刷屏） */
 const MAX_CONTENT_LENGTH = 4000;
@@ -157,6 +162,18 @@ export class SessionsService {
     }
     if (params.kind === 'system') throw new BadRequestException('system 消息由服务端产生');
 
+    // meta 校验：仅接受普通对象，序列化体积受限（服务端不解析字段语义）
+    let meta: Record<string, unknown> | undefined;
+    if (params.meta !== undefined) {
+      if (typeof params.meta !== 'object' || params.meta === null || Array.isArray(params.meta)) {
+        throw new BadRequestException('meta 必须是对象');
+      }
+      if (JSON.stringify(params.meta).length > MAX_META_LENGTH) {
+        throw new BadRequestException('meta 过大');
+      }
+      meta = params.meta;
+    }
+
     const session = await this.assertMember(sessionId, senderId);
     const peerId = session.userAId === senderId ? session.userBId : session.userAId;
     await this.friends.assertFriends(senderId, peerId);
@@ -177,6 +194,8 @@ export class SessionsService {
         kind: params.kind,
         content,
         ...(clientMsgId ? { clientMsgId } : {}),
+        // pg/json 编解码器要求 JsonValue：普通对象按结构兼容透传（字段值已是 JSON 安全类型）
+        ...(meta ? { meta: meta as never } : {}),
       })) as MessageRow;
 
       // fan-out 已读回实行：直接单聊只有对端一个接收者（发送者不建行）；
