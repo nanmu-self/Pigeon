@@ -161,6 +161,96 @@ export interface WsChatMessage {
   createdAt: number;
 }
 
+// ─────────────────────────────────────────────────────────────
+// 好友关系（REST /friends/* + 实时通知）契约
+// ─────────────────────────────────────────────────────────────
+
+/** 好友列表项：资料 + 在线状态 + 成为好友的时间 */
+export interface FriendItem {
+  user: PublicUser;
+  online: boolean;
+  /** 成为好友的时间（服务端时间戳字符串） */
+  since: string;
+}
+
+/** 好友申请项（direction 标明申请流向，user 恒为对方） */
+export interface FriendRequestItem {
+  id: number;
+  direction: 'incoming' | 'outgoing';
+  user: PublicUser;
+  createdAt: string;
+}
+
+/** POST /friends/requests 入参 */
+export interface SendFriendRequestInput {
+  userId: number;
+}
+
+/** WS 实时通知：收到好友申请 */
+export interface WsFriendRequest {
+  from: PublicUser;
+  createdAt: string;
+}
+
+/** WS 实时通知：申请被对方通过 */
+export interface WsFriendAccepted {
+  /** 接受申请的人（即成为好友的对方） */
+  user: PublicUser;
+  since: string;
+}
+
+// ─────────────────────────────────────────────────────────────
+// 会话与消息（REST /sessions/*）契约
+//
+// 服务端表名 Session/Message；线上统一把 id string 化后放进
+// conversationId / message.id（与 WsChatMessage 对齐）。
+// ─────────────────────────────────────────────────────────────
+
+/** POST /sessions 入参：与哪个好友建会话（幂等，重复调用返回既有会话） */
+export interface CreateSessionInput {
+  peerId: number;
+}
+
+/** 会话列表项：对端资料 + 在线状态 + 最后一条消息 + 未读数 */
+export interface SessionSummary {
+  id: string;
+  peer: PublicUser;
+  peerOnline: boolean;
+  /** 最后一条消息（会话尚无消息时不出现） */
+  lastMessage?: WsChatMessage;
+  /** 会话活跃时间（服务端时间戳字符串，列表按它倒序） */
+  lastMessageAt: string;
+  /** 当前用户在该会话的未读数 */
+  unreadCount: number;
+  createdAt: string;
+}
+
+/** GET /sessions/:id/messages 响应：一页历史消息（按时间正序返回） */
+export interface MessageHistoryPage {
+  messages: WsChatMessage[];
+  /** 是否还有更早的消息（拿最后一条的 id 作下一页 cursor） */
+  hasMore: boolean;
+}
+
+/** message:read ack / POST /sessions/:id/read 响应 */
+export interface MessageReadAck {
+  conversationId: string;
+  /** 已读水位：本端已读的最大消息 id */
+  lastReadMessageId: string;
+  /** Unix 毫秒 */
+  readAt: number;
+}
+
+/** S2C 已读回执推送：对方读到了哪条 */
+export interface WsReadReceipt {
+  conversationId: string;
+  /** 执行已读的用户 id */
+  userId: string;
+  lastReadMessageId: string;
+  /** Unix 毫秒 */
+  readAt: number;
+}
+
 export interface WsTypingState {
   conversationId: string;
   userId: string;
@@ -183,8 +273,11 @@ export interface ServerToClientEvents {
     serverTime: number;
   }) => void;
   'message:new': (payload: WsChatMessage) => void;
+  'message:read': (payload: WsReadReceipt) => void;
   'typing:update': (payload: WsTypingState) => void;
   'presence:update': (payload: WsPresenceState) => void;
+  'friend:request': (payload: WsFriendRequest) => void;
+  'friend:accepted': (payload: WsFriendAccepted) => void;
 }
 
 /** Client → Server */
@@ -202,8 +295,15 @@ export interface ClientToServerEvents {
       conversationId: string;
       content: string;
       kind?: WsChatMessage['kind'];
+      /** 客户端幂等键（UUID）：重试重发不会产生重复消息 */
+      clientMsgId?: string;
     },
     ack: WsAckCallback<WsChatMessage>,
+  ) => void;
+  /** 标记会话已读（打开会话/收到新消息时调用），服务端推已读回执给对方 */
+  'message:read': (
+    payload: { conversationId: string },
+    ack: WsAckCallback<MessageReadAck>,
   ) => void;
   'typing:start': (payload: { conversationId: string; displayName?: string }) => void;
   'typing:stop': (payload: { conversationId: string }) => void;

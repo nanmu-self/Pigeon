@@ -1,0 +1,388 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { ValidationPipe } from '@nestjs/common';
+import request from 'supertest';
+import { io, type Socket } from 'socket.io-client';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AppModule } from '../src/app.module.js';
+import { CaptchaService } from '../src/auth/captcha.service.js';
+import { PrismaService } from '../src/prisma.service.js';
+import type {
+  AuthResult,
+  FriendItem,
+  FriendRequestItem,
+  MessageHistoryPage,
+  MessageReadAck,
+  PublicUser,
+  SessionSummary,
+  WsChatMessage,
+} from '@pigeon/shared-types';
+
+/**
+ * 聊天链路端到端验证：
+ *   搜索用户 → 加好友（申请/通过）→ 好友列表（在线状态）→ 建会话
+ *   → WS 发消息（对方实时收到）→ 未读数 → 已读回执 → 历史消息（游标分页）
+ *   → 幂等重发 / 权限闸门 / 拉黑拦截。
+ *
+ * 验证码以测试桩替换（issue 恒返回 test id，verify 只认 0000），
+ * 从而走通真实注册/登录与 JWT 签发链路。
+ */
+
+const CAPTCHA_CODE = '0000';
+
+/** REST 快捷方式 */
+let api: ReturnType<typeof request>;
+let prisma: PrismaService;
+let httpPort = 0;
+
+async function register(nickname: string): Promise<AuthResult> {
+  const email = `${nickname}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@e2e.test`;
+  const response = await api.post('/auth/register').send({
+    email,
+    password: 'Passw0rd!123',
+    nickname,
+    captchaId: 'test-captcha-id',
+    captchaCode: CAPTCHA_CODE,
+  });
+  expect(response.status).toBe(201);
+  return response.body as AuthResult;
+}
+
+/** 连接一个已登录用户的 WS 客户端，等待握手完成 */
+async function connectWs(token: string): Promise<Socket> {
+  const socket = io(`http://localhost:${httpPort}`, {
+    auth: { token },
+    transports: ['websocket'],
+  });
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('ws connect timeout')), 5000);
+    socket.on('connect', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    socket.on('connect_error', (err: Error) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+  return socket;
+}
+
+/** 等待一个一次性事件（带超时） */
+function waitFor<T>(socket: Socket, event: string, timeoutMs = 5000): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timeout waiting ${event}`)), timeoutMs);
+    socket.once(event, (payload: T) => {
+      clearTimeout(timer);
+      resolve(payload);
+    });
+  });
+}
+
+/** 发送一个带 ack 的 C2S 事件 */
+function emitAck<T>(socket: Socket, event: string, payload: unknown): Promise<{ ok: boolean; data?: T; error?: string }> {
+  return new Promise((resolve) => {
+    socket.emit(event, payload, (res: { ok: boolean; data?: T; error?: string }) => resolve(res));
+  });
+}
+
+let alice: AuthResult;
+let bob: AuthResult;
+let charlie: AuthResult;
+
+describe('聊天链路 (e2e)', () => {
+  beforeAll(async () => {
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    })
+      .overrideProvider(CaptchaService)
+      .useValue({
+        issue: () => ({ captchaId: 'test-captcha-id', image: 'data:image/png;base64,' }),
+        verify: (_id: string, code: string) => code === CAPTCHA_CODE,
+      })
+      .compile();
+
+    const app = moduleFixture.createNestApplication();
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
+    app.enableShutdownHooks();
+    await app.listen(0); // 随机端口，避免并发冲突
+    httpPort = (app.getHttpServer().address() as { port: number }).port;
+    api = request(app.getHttpServer());
+    prisma = app.get(PrismaService);
+
+    alice = await register('Alice');
+    bob = await register('Bob');
+    charlie = await register('Charlie');
+  });
+
+  afterAll(async () => {
+    // 测试用户级联清理：好友/会话/消息/回实行
+    for (const u of [alice, bob, charlie]) {
+      const id = u.user.id;
+      const sessA = await prisma.orm.public.Session.where({ userAId: id }).all();
+      const sessB = await prisma.orm.public.Session.where({ userBId: id }).all();
+      for (const s of [...sessA, ...sessB]) {
+        await prisma.orm.public.Message.where({ sessionId: s.id }).deleteAll();
+        await prisma.orm.public.Session.where({ id: s.id }).delete();
+      }
+      await prisma.orm.public.Friendship.where({ userAId: id }).deleteAll();
+      await prisma.orm.public.Friendship.where({ userBId: id }).deleteAll();
+      await prisma.orm.public.User.where({ id }).delete();
+    }
+    await prisma.onApplicationShutdown();
+  });
+
+  it('搜索用户：昵称模糊 + 邮箱精确，且不含自己', async () => {
+    const byNickname = await api
+      .get(`/users/search?q=${encodeURIComponent('bob')}`)
+      .auth(alice.token, { type: 'bearer' });
+    expect(byNickname.status).toBe(200);
+    const hit = (byNickname.body as PublicUser[]).find((u) => u.id === bob.user.id);
+    expect(hit?.nickname).toBe('Bob');
+
+    const byEmail = await api
+      .get(`/users/search?q=${encodeURIComponent(bob.user.email)}`)
+      .auth(alice.token, { type: 'bearer' });
+    expect((byEmail.body as PublicUser[]).map((u) => u.id)).toContain(bob.user.id);
+
+    const self = await api
+      .get(`/users/search?q=alice`)
+      .auth(alice.token, { type: 'bearer' });
+    expect((self.body as PublicUser[]).map((u) => u.id)).not.toContain(alice.user.id);
+  });
+
+  it('加好友：申请 → 对方收到 → 通过 → 双方好友列表可见', async () => {
+    // 重复申请被拒（409）
+    const first = await api
+      .post('/friends/requests')
+      .auth(alice.token, { type: 'bearer' })
+      .send({ userId: bob.user.id });
+    expect(first.status).toBe(201);
+    const requestId = (first.body as FriendRequestItem).id;
+
+    const dup = await api
+      .post('/friends/requests')
+      .auth(alice.token, { type: 'bearer' })
+      .send({ userId: bob.user.id });
+    expect(dup.status).toBe(409);
+
+    // bob 的待处理申请列表
+    const inbox = await api.get('/friends/requests').auth(bob.token, { type: 'bearer' });
+    expect(inbox.status).toBe(200);
+    const incoming = (inbox.body as FriendRequestItem[]).find((r) => r.id === requestId);
+    expect(incoming?.direction).toBe('incoming');
+    expect(incoming?.user.id).toBe(alice.user.id);
+
+    // 通过前还不是好友：建会话被闸门拦截
+    const early = await api
+      .post('/sessions')
+      .auth(alice.token, { type: 'bearer' })
+      .send({ peerId: bob.user.id });
+    expect(early.status).toBe(403);
+
+    // bob 通过 → alice 收到 WS 通知
+    const socketAlice = await connectWs(alice.token);
+    const acceptedNotify = waitFor<{ user: PublicUser }>(socketAlice, 'friend:accepted');
+    const accept = await api
+      .post(`/friends/requests/${requestId}/accept`)
+      .auth(bob.token, { type: 'bearer' });
+    expect(accept.status).toBe(201);
+    const notified = await acceptedNotify;
+    expect(notified.user.id).toBe(bob.user.id);
+
+    // 双方好友列表（alice 在线 → bob 视角 online: true）
+    const bobFriends = await api.get('/friends').auth(bob.token, { type: 'bearer' });
+    const bobList = bobFriends.body as FriendItem[];
+    expect(bobList.map((f) => f.user.id)).toContain(alice.user.id);
+    expect(bobList.find((f) => f.user.id === alice.user.id)?.online).toBe(true);
+
+    const aliceFriends = await api.get('/friends').auth(alice.token, { type: 'bearer' });
+    expect((aliceFriends.body as FriendItem[]).map((f) => f.user.id)).toContain(bob.user.id);
+    await socketAlice.disconnect();
+  });
+
+  it('建会话（幂等）→ 发消息 → 对方实时收到 + 未读数', async () => {
+    const socketAlice = await connectWs(alice.token);
+    const socketBob = await connectWs(bob.token);
+
+    const created = await api
+      .post('/sessions')
+      .auth(alice.token, { type: 'bearer' })
+      .send({ peerId: bob.user.id });
+    expect(created.status).toBe(201);
+    const sessionId = (created.body as SessionSummary).id;
+
+    // 幂等：再次创建返回同一会话
+    const again = await api
+      .post('/sessions')
+      .auth(bob.token, { type: 'bearer' })
+      .send({ peerId: alice.user.id });
+    expect((again.body as SessionSummary).id).toBe(sessionId);
+
+    // 发消息：ack 带服务端 id；bob 实时收到 message:new
+    const received = waitFor<WsChatMessage>(socketBob, 'message:new');
+    const sent = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+      conversationId: sessionId,
+      content: '你好，Bob！',
+      clientMsgId: 'e2e-msg-1',
+    });
+    expect(sent.ok).toBe(true);
+    expect(sent.data?.senderName).toBe('Alice');
+    expect(Number(sent.data?.id)).toBeGreaterThan(0);
+    const firstMessage = sent.data as WsChatMessage;
+    expect((await received).id).toBe(firstMessage.id);
+
+    // bob 未读数 = 1；会话列表带最后一条消息预览
+    const bobSessions = await api.get('/sessions').auth(bob.token, { type: 'bearer' });
+    const summary = (bobSessions.body as SessionSummary[]).find((s) => s.id === sessionId);
+    expect(summary?.unreadCount).toBe(1);
+    expect(summary?.lastMessage?.content).toBe('你好，Bob！');
+    expect(summary?.peer.id).toBe(alice.user.id);
+
+    // 幂等重发：同 clientMsgId → 同一条消息（不新增、不重复推送）
+    const resent = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+      conversationId: sessionId,
+      content: '你好，Bob！',
+      clientMsgId: 'e2e-msg-1',
+    });
+    expect(resent.ok).toBe(true);
+    expect(resent.data?.id).toBe(firstMessage.id);
+    const bobSessions2 = await api.get('/sessions').auth(bob.token, { type: 'bearer' });
+    expect((bobSessions2.body as SessionSummary[]).find((s) => s.id === sessionId)?.unreadCount).toBe(1);
+
+    void socketBob;
+    await socketAlice.disconnect();
+    await socketBob.disconnect();
+    // 供后续用例复用
+    (globalThis as { __e2eSessionId?: string }).__e2eSessionId = sessionId;
+  });
+
+  it('已读回执：B 标记已读 → A 收到推送 + 未读清零', async () => {
+    const sessionId = (globalThis as { __e2eSessionId?: string }).__e2eSessionId;
+    const socketAlice = await connectWs(alice.token);
+    const socketBob = await connectWs(bob.token);
+
+    const receipt = waitFor<{ conversationId: string; userId: string; lastReadMessageId: string }>(
+      socketAlice,
+      'message:read',
+    );
+    const readAck = await emitAck<MessageReadAck>(socketBob, 'message:read', { conversationId: sessionId });
+    expect(readAck.ok).toBe(true);
+    expect(Number(readAck.data?.lastReadMessageId)).toBeGreaterThan(0);
+
+    const got = await receipt;
+    expect(got.conversationId).toBe(sessionId);
+    expect(got.userId).toBe(String(bob.user.id));
+    expect(got.lastReadMessageId).toBe(readAck.data?.lastReadMessageId);
+
+    // 未读清零；REST 已读接口同样可用（幂等）
+    const bobSessions = await api.get('/sessions').auth(bob.token, { type: 'bearer' });
+    expect((bobSessions.body as SessionSummary[]).find((s) => s.id === sessionId)?.unreadCount).toBe(0);
+    const restRead = await api.post(`/sessions/${sessionId}/read`).auth(bob.token, { type: 'bearer' });
+    expect((restRead.body as MessageReadAck).conversationId).toBe(sessionId);
+
+    await socketAlice.disconnect();
+    await socketBob.disconnect();
+  });
+
+  it('历史消息：正序返回 + 游标分页', async () => {
+    const sessionId = (globalThis as { __e2eSessionId?: string }).__e2eSessionId;
+    const socketAlice = await connectWs(alice.token);
+
+    // 再发 4 条（合计 5 条）
+    for (let i = 2; i <= 5; i++) {
+      const r = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+        conversationId: sessionId,
+        content: `消息 ${i}`,
+        clientMsgId: `e2e-msg-${i}`,
+      });
+      expect(r.ok).toBe(true);
+    }
+    await socketAlice.disconnect();
+
+    const page1 = await api
+      .get(`/sessions/${sessionId}/messages?limit=3`)
+      .auth(bob.token, { type: 'bearer' });
+    expect(page1.status).toBe(200);
+    const p1 = page1.body as MessageHistoryPage;
+    expect(p1.messages).toHaveLength(3);
+    // 第一页 = 最新 3 条（打开聊天先看最新消息），页内按时间正序
+    expect(p1.messages.map((m) => m.content)).toEqual(['消息 3', '消息 4', '消息 5']);
+    expect(p1.hasMore).toBe(true);
+
+    // 用本页最早一条的 id 作游标往前翻
+    const cursor = p1.messages[0].id;
+    const page2 = await api
+      .get(`/sessions/${sessionId}/messages?limit=3&cursor=${cursor}`)
+      .auth(bob.token, { type: 'bearer' });
+    const p2 = page2.body as MessageHistoryPage;
+    expect(p2.messages.map((m) => m.content)).toEqual(['你好，Bob！', '消息 2']);
+    expect(p2.hasMore).toBe(false);
+  });
+
+  it('权限闸门：非好友不能建会话，非成员不能读历史/发消息', async () => {
+    // charlie（与 alice/bob 无关系）不能建会话
+    const noFriend = await api
+      .post('/sessions')
+      .auth(charlie.token, { type: 'bearer' })
+      .send({ peerId: alice.user.id });
+    expect(noFriend.status).toBe(403);
+
+    // charlie 不能读 alice-bob 的会话历史，也不能标记已读
+    const sessionId = (globalThis as { __e2eSessionId?: string }).__e2eSessionId;
+    const history = await api.get(`/sessions/${sessionId}/messages`).auth(charlie.token, { type: 'bearer' });
+    expect(history.status).toBe(403);
+    const read = await api.post(`/sessions/${sessionId}/read`).auth(charlie.token, { type: 'bearer' });
+    expect(read.status).toBe(403);
+
+    // charlie 连上 WS 也发不了消息到该会话（非成员）
+    const socketCharlie = await connectWs(charlie.token);
+    const send = await emitAck<WsChatMessage>(socketCharlie, 'message:send', {
+      conversationId: sessionId,
+      content: '骚扰',
+    });
+    expect(send.ok).toBe(false);
+    await socketCharlie.disconnect();
+  });
+
+  it('拉黑拦截：拉黑后对方发消息被拒，解除后恢复', async () => {
+    const sessionId = (globalThis as { __e2eSessionId?: string }).__e2eSessionId;
+    const socketAlice = await connectWs(alice.token);
+    const socketBob = await connectWs(bob.token);
+
+    // alice 拉黑 bob
+    const block = await api
+      .post(`/friends/${bob.user.id}/block`)
+      .auth(alice.token, { type: 'bearer' });
+    expect(block.status).toBe(204);
+
+    // bob 给 alice 发消息 → 被好友闸门拦截
+    const blocked = await emitAck<WsChatMessage>(socketBob, 'message:send', {
+      conversationId: sessionId,
+      content: '还能发吗',
+    });
+    expect(blocked.ok).toBe(false);
+
+    // bob 反向建会话也被拦（同一闸门）
+    const newSession = await api
+      .post('/sessions')
+      .auth(bob.token, { type: 'bearer' })
+      .send({ peerId: alice.user.id });
+    expect(newSession.status).toBe(403);
+
+    // alice 解除拉黑 → 曾是好友（acceptedAt 非空）→ 恢复 accepted
+    const unblock = await api
+      .post(`/friends/${bob.user.id}/unblock`)
+      .auth(alice.token, { type: 'bearer' });
+    expect(unblock.status).toBe(204);
+
+    const okAgain = await emitAck<WsChatMessage>(socketBob, 'message:send', {
+      conversationId: sessionId,
+      content: '又通了',
+      clientMsgId: 'e2e-msg-6',
+    });
+    expect(okAgain.ok).toBe(true);
+
+    await socketAlice.disconnect();
+    await socketBob.disconnect();
+  });
+});

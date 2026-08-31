@@ -11,15 +11,17 @@ import type { Socket } from 'socket.io';
 import type {
   ClientToServerEvents,
   InterServerEvents,
+  MessageReadAck,
   ServerToClientEvents,
   SocketData,
   WsAckCallback,
   WsChatMessage,
 } from '@pigeon/shared-types';
-import { Inject, Logger } from '@nestjs/common';
+import { HttpException, Inject, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { allowedOrigins } from '../config.js';
 import type { JwtPayload } from '../auth/auth.service.js';
+import { SessionsService } from '../sessions/sessions.service.js';
 import { WsEventsService, type IoServer } from './ws-events.service.js';
 
 /** ack 回调（client → server 事件的最后一个参数） */
@@ -57,16 +59,25 @@ export class EventsGateway
 
   private readonly logger = new Logger(EventsGateway.name);
 
-  /** userId → 在线 socketId 集合，用于 presence 广播 */
-  private readonly online = new Map<string, Set<string>>();
-
   // 注意：本仓库用 swc/esbuild 编译，不产出装饰器元数据，
   // 因此依赖注入一律显式 @Inject（见 app.controller.ts），
   // WS 消息处理器用普通参数而非 @MessageBody。
   constructor(
     @Inject(WsEventsService) private readonly events: WsEventsService,
     @Inject(JwtService) private readonly jwt: JwtService,
+    @Inject(SessionsService) private readonly sessions: SessionsService,
   ) {}
+
+  /** 把业务异常（HttpException）转成给客户端的 ack 文案 */
+  private errorText(error: unknown): string {
+    if (error instanceof HttpException) {
+      const res = error.getResponse();
+      if (typeof res === 'string') return res;
+      return (res as { message?: string }).message ?? error.message;
+    }
+    this.logger.error(`ws handler failed: ${String(error)}`);
+    return '服务器开小差了，请稍后再试';
+  }
 
   afterInit(server: IoServer): void {
     // 把 io 句柄交给桥接服务，HTTP 侧即可注入 WsEventsService 做推送
@@ -112,10 +123,7 @@ export class EventsGateway
     // 加入个人房间，便于定向推送（后续配合真实登录使用）
     await client.join(`user:${client.data.userId}`);
 
-    const firstSocketOfUser = !this.online.has(client.data.userId);
-    const sockets = this.online.get(client.data.userId) ?? new Set<string>();
-    sockets.add(client.id);
-    this.online.set(client.data.userId, sockets);
+    const firstSocketOfUser = this.events.markOnline(client.data.userId, client.id);
 
     client.emit('connection:welcome', {
       socketId: client.id,
@@ -140,11 +148,8 @@ export class EventsGateway
     const userId = client.data?.userId;
     if (!userId) return;
 
-    const sockets = this.online.get(userId);
-    sockets?.delete(client.id);
-    if (sockets && sockets.size === 0) {
-      this.online.delete(userId);
-      // 该用户的最后一路连接断开 → 广播离线
+    // 该用户的最后一路连接断开 → 广播离线
+    if (this.events.markOffline(userId, client.id)) {
       this.events.broadcast('presence:update', {
         userId,
         online: false,
@@ -189,33 +194,84 @@ export class EventsGateway
 
   // ── 消息 ─────────────────────────────────────────────────
 
+  /**
+   * 发消息：会话成员 + 好友关系校验后事务落库（消息 + 回实行 + 会话活跃指针），
+   * 推送由 SessionsService 统一向双方 user 房间广播 message:new。
+   */
   @SubscribeMessage('message:send')
   async onMessageSend(
     client: IoSocket,
-    payload: { conversationId: string; content: string; kind?: WsChatMessage['kind'] },
+    payload: {
+      conversationId: string;
+      content: string;
+      kind?: WsChatMessage['kind'];
+      clientMsgId?: string;
+    },
     ack?: Ack<WsChatMessage>,
   ): Promise<void> {
-    const { conversationId, content } = payload;
+    const { conversationId, content, kind, clientMsgId } = payload;
     if (!conversationId || !content?.trim()) {
       ack?.({ ok: false, error: 'conversationId and content are required' });
       return;
     }
+    const senderId = Number(client.data.userId);
+    if (!Number.isInteger(senderId)) {
+      ack?.({ ok: false, error: '游客不能发送消息，请先登录' });
+      return;
+    }
+    const sessionId = Number(conversationId);
+    if (!Number.isInteger(sessionId) || sessionId <= 0) {
+      ack?.({ ok: false, error: '会话不存在' });
+      return;
+    }
+    if (kind && !['text', 'image', 'file'].includes(kind)) {
+      ack?.({ ok: false, error: '不支持的消息类型' });
+      return;
+    }
 
-    // TODO(业务): 校验 client.data.userId 是否为该会话成员（查 Prisma），
-    // 通过后再落库并把 DB id 填进 message.id，最后广播。
-    const message: WsChatMessage = {
-      id: randomUUID(),
-      conversationId,
-      senderId: client.data.userId,
-      senderName: client.data.displayName,
-      kind: payload.kind ?? 'text',
-      content,
-      createdAt: Date.now(),
-    };
+    try {
+      const message = await this.sessions.sendMessage({
+        sessionId,
+        senderId,
+        senderName: client.data.displayName,
+        content,
+        kind: kind ?? 'text',
+        ...(clientMsgId ? { clientMsgId } : {}),
+      });
+      // 先 ack（发送方获得回执）；message:new 由服务层推给双方所有设备
+      ack?.({ ok: true, data: message });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
 
-    // 先 ack（发送方获得回执），再向房间广播（含发送方自己的其他设备）
-    ack?.({ ok: true, data: message });
-    this.server.to(`conversation:${conversationId}`).emit('message:new', message);
+  /**
+   * 标记会话已读：批量写 readAt + 计算已读水位，
+   * 对端会收到 message:read 推送（已读回执）。
+   */
+  @SubscribeMessage('message:read')
+  async onMessageRead(
+    client: IoSocket,
+    payload: { conversationId: string },
+    ack?: Ack<MessageReadAck>,
+  ): Promise<void> {
+    const readerId = Number(client.data.userId);
+    if (!Number.isInteger(readerId)) {
+      ack?.({ ok: false, error: '游客没有消息状态，请先登录' });
+      return;
+    }
+    const sessionId = Number(payload?.conversationId);
+    if (!Number.isInteger(sessionId) || sessionId <= 0) {
+      ack?.({ ok: false, error: '会话不存在' });
+      return;
+    }
+
+    try {
+      const result = await this.sessions.markRead(readerId, sessionId);
+      ack?.({ ok: true, data: result });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
   }
 
   // ── 正在输入 ─────────────────────────────────────────────

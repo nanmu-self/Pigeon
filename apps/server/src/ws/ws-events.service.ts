@@ -32,6 +32,9 @@ export class WsEventsService {
   private readonly logger = new Logger(WsEventsService.name);
   private io: IoServer | null = null;
 
+  /** userId → 在线 socketId 集合（presence 注册表，供 REST 侧查询在线状态） */
+  private readonly online = new Map<string, Set<string>>();
+
   /** socket.io 对 E/S 泛型的包装与 TS 高阶推断不兼容，内部 emit 统一窄化 */
   private emitRaw(
     target: { emit(event: string, ...args: unknown[]): unknown } | undefined,
@@ -50,6 +53,37 @@ export class WsEventsService {
   /** 当前在线连接数（所有 namespace） */
   get onlineCount(): number {
     return this.io?.engine.clientsCount ?? 0;
+  }
+
+  // ── presence 注册表（网关在连接/断开时维护，REST 侧只读） ──
+
+  /**
+   * 连接上线。返回是否该用户的第一路连接（用于广播上线事件）。
+   */
+  markOnline(userId: string, socketId: string): boolean {
+    const firstSocket = !this.online.has(userId);
+    const sockets = this.online.get(userId) ?? new Set<string>();
+    sockets.add(socketId);
+    this.online.set(userId, sockets);
+    return firstSocket;
+  }
+
+  /**
+   * 连接下线。返回是否该用户的最后一路连接（用于广播离线事件）。
+   */
+  markOffline(userId: string, socketId: string): boolean {
+    const sockets = this.online.get(userId);
+    sockets?.delete(socketId);
+    if (sockets && sockets.size === 0) {
+      this.online.delete(userId);
+      return true;
+    }
+    return false;
+  }
+
+  /** 用户是否有任一在线设备 */
+  isOnline(userId: string): boolean {
+    return (this.online.get(userId)?.size ?? 0) > 0;
   }
 
   /** 推给某个用户的全部在线设备（个人房间 `user:{userId}`） */
