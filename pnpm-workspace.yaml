@@ -5,3 +5,7 @@ packages:
 allowBuilds:
   '@swc/core': true
   esbuild: true
+  msgpackr-extract: true
+  workerd: true
+minimumReleaseAgeExclude:
+  - '@lucide/svelte@1.38.0'
