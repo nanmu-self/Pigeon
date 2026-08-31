@@ -57,6 +57,8 @@ export class ApiError extends Error {
 
 export const http = createAlova({
   requestAdapter: adapterFetch(),
+  // 必须显式指定服务端地址：否则相对路径会打到前端自身 origin（Vite dev 1420 / Tauri webview）→ 404
+  baseURL: SERVER_URL,
   timeout: 10_000,
   cacheFor: null,
   beforeRequest(method) {

@@ -10,12 +10,13 @@ async function bootstrap() {
   });
   // Ensure OnApplicationShutdown runs so the Prisma pool closes gracefully.
   app.enableShutdownHooks();
-  // 入参校验:剥离/拒绝未声明字段,校验失败统一 400(class-validator DTO)
+  // 入参校验：剥离/拒绝未声明字段，校验失败统一 400（class-validator DTO）
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }),
   );
 
-  // Tauri webview 直连（alova fetch），生产包 origin 因平台而异 → 统一走 allowedOrigins()
+  // Tauri webview 直连（alova fetch），生产包 origin 因平台而异 → 统一走 allowedOrigins()。
+  // REST 跨域与 WS 网关共用同一份来源白名单。
   app.enableCors({ origin: allowedOrigins(), credentials: true });
 
   await app.listen(process.env.PORT ?? 3048);
