@@ -1,0 +1,9 @@
+[
+  {
+    "kind": "sql",
+    "id": "foreignKey.session.session_lastMessageId_fkey.setnull",
+    "label": "Alter foreign key \"session_lastMessageId_fkey\" to ON DELETE SET NULL",
+    "operationClass": "widening",
+    "sql": "ALTER TABLE \"public\".\"session\"\n  DROP CONSTRAINT \"session_lastMessageId_fkey\",\n  ADD CONSTRAINT \"session_lastMessageId_fkey\"\n  FOREIGN KEY (\"lastMessageId\") REFERENCES \"public\".\"message\"(\"id\") ON DELETE SET NULL"
+  }
+]

@@ -33,7 +33,7 @@ import type {
 } from '@prisma/orm-postgres/contract/types';
 
 export type StorageHash =
-  StorageHashBase<'37d533050215b4c62589f7c14d67c4ae277d4324e5cd84ba833e69fad794e5d9'>;
+  StorageHashBase<'df76baa0fa16833f093a243b303f43c529b2b48fbdb2dff9f93523110a1f6e12'>;
 export type ExecutionHash =
   ExecutionHashBase<'410b14ad278f3c4f2ef1b7e0e449ed69d4d5505a49d36e38af1c0be620f3c1f5'>;
 export type ProfileHash =
@@ -248,7 +248,7 @@ export type FieldOutputTypes = {
       readonly status: 'pending' | 'accepted' | 'blocked';
       readonly requesterId: CodecTypes['pg/int4@1']['output'];
       readonly blockedById: CodecTypes['pg/int4@1']['output'] | null;
-      readonly acceptedAt: CodecTypes['pg/timestamptz-string@1']['output'] | null;
+      readonly acceptedAt: CodecTypes['pg/timestamptz-temporal@1']['output'] | null;
       readonly createdAt: CodecTypes['pg/timestamptz-string@1']['output'];
       readonly updatedAt: CodecTypes['pg/timestamptz-string@1']['output'];
     };
@@ -266,7 +266,7 @@ export type FieldOutputTypes = {
       readonly messageId: CodecTypes['pg/int4@1']['output'];
       readonly userId: CodecTypes['pg/int4@1']['output'];
       readonly sessionId: CodecTypes['pg/int4@1']['output'];
-      readonly readAt: CodecTypes['pg/timestamptz-string@1']['output'] | null;
+      readonly readAt: CodecTypes['pg/timestamptz-temporal@1']['output'] | null;
     };
     readonly Session: {
       readonly id: CodecTypes['pg/int4@1']['output'];
@@ -296,7 +296,7 @@ export type FieldInputTypes = {
       readonly status: 'pending' | 'accepted' | 'blocked';
       readonly requesterId: CodecTypes['pg/int4@1']['input'];
       readonly blockedById: CodecTypes['pg/int4@1']['input'] | null;
-      readonly acceptedAt: CodecTypes['pg/timestamptz-string@1']['input'] | null;
+      readonly acceptedAt: CodecTypes['pg/timestamptz-temporal@1']['input'] | null;
       readonly createdAt: CodecTypes['pg/timestamptz-string@1']['input'];
       readonly updatedAt: CodecTypes['pg/timestamptz-string@1']['input'];
     };
@@ -314,7 +314,7 @@ export type FieldInputTypes = {
       readonly messageId: CodecTypes['pg/int4@1']['input'];
       readonly userId: CodecTypes['pg/int4@1']['input'];
       readonly sessionId: CodecTypes['pg/int4@1']['input'];
-      readonly readAt: CodecTypes['pg/timestamptz-string@1']['input'] | null;
+      readonly readAt: CodecTypes['pg/timestamptz-temporal@1']['input'] | null;
     };
     readonly Session: {
       readonly id: CodecTypes['pg/int4@1']['input'];
@@ -338,7 +338,7 @@ export type FieldInputTypes = {
 export type StorageColumnTypes = {
   readonly public: {
     readonly friendship: {
-      readonly acceptedAt: CodecTypes['pg/timestamptz-string@1']['output'] | null;
+      readonly acceptedAt: CodecTypes['pg/timestamptz-temporal@1']['output'] | null;
       readonly blockedById: CodecTypes['pg/int4@1']['output'] | null;
       readonly createdAt: CodecTypes['pg/timestamptz-string@1']['output'];
       readonly id: CodecTypes['pg/int4@1']['output'];
@@ -360,7 +360,7 @@ export type StorageColumnTypes = {
     };
     readonly messageStatus: {
       readonly messageId: CodecTypes['pg/int4@1']['output'];
-      readonly readAt: CodecTypes['pg/timestamptz-string@1']['output'] | null;
+      readonly readAt: CodecTypes['pg/timestamptz-temporal@1']['output'] | null;
       readonly sessionId: CodecTypes['pg/int4@1']['output'];
       readonly userId: CodecTypes['pg/int4@1']['output'];
     };
@@ -386,7 +386,7 @@ export type StorageColumnTypes = {
 export type StorageColumnInputTypes = {
   readonly public: {
     readonly friendship: {
-      readonly acceptedAt: CodecTypes['pg/timestamptz-string@1']['input'] | null;
+      readonly acceptedAt: CodecTypes['pg/timestamptz-temporal@1']['input'] | null;
       readonly blockedById: CodecTypes['pg/int4@1']['input'] | null;
       readonly createdAt: CodecTypes['pg/timestamptz-string@1']['input'];
       readonly id: CodecTypes['pg/int4@1']['input'];
@@ -408,7 +408,7 @@ export type StorageColumnInputTypes = {
     };
     readonly messageStatus: {
       readonly messageId: CodecTypes['pg/int4@1']['input'];
-      readonly readAt: CodecTypes['pg/timestamptz-string@1']['input'] | null;
+      readonly readAt: CodecTypes['pg/timestamptz-temporal@1']['input'] | null;
       readonly sessionId: CodecTypes['pg/int4@1']['input'];
       readonly userId: CodecTypes['pg/int4@1']['input'];
     };
@@ -491,7 +491,7 @@ type ContractBase = Omit<
                 };
                 readonly acceptedAt: {
                   readonly nativeType: 'timestamptz';
-                  readonly codecId: 'pg/timestamptz-string@1';
+                  readonly codecId: 'pg/timestamptz-temporal@1';
                   readonly nullable: true;
                 };
                 readonly createdAt: {
@@ -705,7 +705,7 @@ type ContractBase = Omit<
                 };
                 readonly readAt: {
                   readonly nativeType: 'timestamptz';
-                  readonly codecId: 'pg/timestamptz-string@1';
+                  readonly codecId: 'pg/timestamptz-temporal@1';
                   readonly nullable: true;
                 };
               };
@@ -991,7 +991,7 @@ type ContractBase = Omit<
                 readonly nullable: true;
                 readonly type: {
                   readonly kind: 'scalar';
-                  readonly codecId: 'pg/timestamptz-string@1';
+                  readonly codecId: 'pg/timestamptz-temporal@1';
                 };
               };
               readonly createdAt: {
@@ -1162,7 +1162,7 @@ type ContractBase = Omit<
                 readonly nullable: true;
                 readonly type: {
                   readonly kind: 'scalar';
-                  readonly codecId: 'pg/timestamptz-string@1';
+                  readonly codecId: 'pg/timestamptz-temporal@1';
                 };
               };
             };

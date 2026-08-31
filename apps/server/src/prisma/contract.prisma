@@ -8,4 +8,167 @@ model User {
   avatarUrl String?
   createdAt TimestamptzString @default(now())
   updatedAt temporal.updatedAtString()
+
+  /// 以 userA / userB 身份参与的单聊会话（对端关系见 Session）
+  sessionsAsA Session[] @relation("SessionUserA")
+  sessionsAsB Session[] @relation("SessionUserB")
+  /// 发出的消息（kind = system 时 senderId 为空，不走此关系）
+  messages Message[]
+}
+
+/// 单聊会话：两个用户之间的会话记录。
+///
+/// 约定 userAId < userBId（服务层写入前按 id 归一化），配合
+/// @@unique([userAId, userBId]) 保证一对用户至多一个会话；
+/// 建会话用「查不到就插入」的幂等写法，插入冲突即返回既有会话。
+model Session {
+  id Int @id @default(autoincrement())
+
+  /// 会话双方（归一化后小 id 为 A，大 id 为 B）
+  userAId Int
+  userBId Int
+
+  /// 最后一条消息的冗余指针：会话列表一次 include 带出预览，免逐会话子查询
+  lastMessageId Int?
+  /// 会话活跃时间（建会话 = now，之后每来一条消息更新为该消息的 createdAt）；
+  /// 会话列表按它倒序排
+  lastMessageAt TimestamptzString @default(now())
+
+  createdAt TimestamptzString @default(now())
+
+  userA User @relation("SessionUserA", fields: [userAId], references: [id])
+  userB User @relation("SessionUserB", fields: [userBId], references: [id])
+  /// 循环外键：Message.sessionId → Session，Session.lastMessageId → Message；
+  /// SetNull：删消息时自动清会话指针，否则两把 Restrict 锁死，消息永远删不掉
+  lastMessage Message? @relation(fields: [lastMessageId], references: [id], onDelete: SetNull)
+
+  messages Message[]
+
+  /// 一对用户至多一个会话（前缀 userAId 同时服务「我作为 A」的查询）
+  @@unique([userAId, userBId])
+  /// 「我作为 B」的会话列表查询走此索引（与上面的复合唯一索引组成 OR 两臂）
+  @@index([userBId])
+}
+
+/// 消息：会话内的消息内容。
+///
+/// content 语义随 kind 变化：text = 正文；image/file = 七牛外链 url；
+/// 结构化附加信息（文件名/大小/mime 等）放 meta。E2EE 接入后
+/// content 为密文、meta 携带加密信封，服务端始终不解析内容。
+model Message {
+  id Int @id @default(autoincrement())
+
+  sessionId Int
+  /// 发送者；kind = system 的系统消息无发送者
+  senderId Int?
+
+  kind    MessageKind @default(text)
+  content String
+  /// image/file 的附加信息（fname/size/mime/宽高…），E2EE 后放密钥信封
+  meta    Json?
+
+  /// 客户端幂等键（UUID）：与 senderId 联合唯一，重试重发不会重复落库；
+  /// 对齐桌面端本地表的 client_msg_id
+  clientMsgId String?
+
+  createdAt TimestamptzString @default(now())
+
+  /// 会话删除前不可删消息（默认 Restrict），聊天记录随会话生命周期保留
+  session Session @relation(fields: [sessionId], references: [id])
+  sender  User?   @relation(fields: [senderId], references: [id])
+
+  /// 会话内按 id 游标分页 / 离线同步（id > lastSeen）：单索引全覆盖
+  @@index([sessionId, id])
+  /// 幂等去重：同用户同 clientMsgId 只能落一条（NULL 互不冲突，系统消息可空）
+  @@unique([senderId, clientMsgId])
+
+  /// 已读回实行（每个接收者一行，见 MessageStatus）
+  statuses MessageStatus[]
+}
+
+/// 消息类型，与 shared-types 的 WsChatMessage.kind 对齐
+enum MessageKind {
+  text
+  image
+  file
+  system
+}
+
+/// 好友关系：申请 → 通过，以及拉黑 / 删除。
+///
+/// 单行对称模型：userAId < userBId（服务层归一化，同 Session），
+/// @@unique 保证一对用户至多一行。状态机（服务层实现）：
+///   申请       无行 → INSERT pending；已有 pending/accepted → 幂等返回；
+///              若对方已 blocked 我 → 静默拒绝（不暴露被拉黑）
+///   通过       仅被申请方可 pending → accepted（写 acceptedAt）
+///   拒绝       DELETE 行（对方可再次申请）
+///   拉黑       任意状态 → blocked + blockedById；无行时也可直接建
+///              blocked 行（屏蔽陌生人再申请）
+///   解除拉黑   acceptedAt 非空 → 恢复 accepted 并清 blockedById；
+///              否则 DELETE 行（回到陌生人）
+///   删除好友   DELETE 行（Session 及历史保留，服务层禁止非好友互发消息）
+model Friendship {
+  id Int @id @default(autoincrement())
+
+  /// 关系双方（归一化后小 id 为 A，大 id 为 B）
+  userAId Int
+  userBId Int
+  status  FriendshipStatus @default(pending)
+
+  /// 申请发起方（pending 时另一方为待处理人；通过后保留便于展示）
+  requesterId Int
+  /// 拉黑执行者（status = blocked 时必填）
+  blockedById Int?
+
+  /// 成为好友的时间；解除拉黑时据此判断恢复好友还是回到陌生人
+  acceptedAt TimestamptzString?
+
+  createdAt TimestamptzString @default(now())
+  updatedAt temporal.updatedAtString()
+
+  userA     User  @relation("FriendshipUserA", fields: [userAId], references: [id])
+  userB     User  @relation("FriendshipUserB", fields: [userBId], references: [id])
+  requester User  @relation("FriendshipRequester", fields: [requesterId], references: [id])
+  blockedBy User? @relation("FriendshipBlocker", fields: [blockedById], references: [id])
+
+  /// 一对用户至多一行关系（前缀 userAId 服务「我作为 A」的查询）
+  @@unique([userAId, userBId])
+  /// 「我作为 B」的关系/待处理申请查询走此索引（与唯一索引组成 OR 两臂）
+  @@index([userBId])
+}
+
+/// 好友关系状态
+enum FriendshipStatus {
+  pending
+  accepted
+  blocked
+}
+
+/// 消息状态：已读/未读的细粒度回执 —— 每条消息 × 每个接收者一行，
+/// 发送者不建行（自己发的必然已读）。
+///
+/// 消息落库时同事务 fan-out 出全部接收者的行（接收者 = 会话成员 − 发送者，
+/// system 消息双方都是接收者）；readAt 为空 = 未读。群聊到来时每成员一行，
+/// 模型天然兼容。
+///
+/// 三条热路径全走 (sessionId, userId, messageId) 单索引，均免 join：
+///   未读数     COUNT WHERE sessionId + userId + readAt IS NULL
+///   批量已读   UPDATE readAt WHERE sessionId + userId + readAt IS NULL
+///   已读水位   MAX(messageId) ——「对方读到了哪条」
+model MessageStatus {
+  /// 消息 id + 接收者 id 复合主键：天然防重，无需代理 id
+  messageId Int
+  userId    Int
+  /// 冗余会话 id：三条热路径均免 join message
+  sessionId Int
+
+  /// 阅读时间；NULL = 未读
+  readAt TimestamptzString?
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id])
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@id([messageId, userId])
+  @@index([sessionId, userId, messageId])
 }
