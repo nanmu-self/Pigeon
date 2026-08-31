@@ -11,18 +11,36 @@ import { createAlova } from 'alova';
 import adapterFetch from 'alova/fetch';
 import { SERVER_URL } from './config';
 
-// ── token 存取（占位实现：登录功能落地后替换为安全存储） ──
+// ── token 存取 ──
+// “记住我”语义：勾选 → localStorage（跨应用重启保留）；
+// 不勾 → sessionStorage（仅当前会话，关闭应用即失效）。
+// 读取时 sessionStorage 优先（后登录的会话凭据覆盖长期凭据）。
 const TOKEN_KEY = 'pigeon:token';
+const REMEMBER_EMAIL_KEY = 'pigeon:remember-email';
 
 export const tokenStore = {
   get(): string {
-    return localStorage.getItem(TOKEN_KEY) ?? '';
+    return sessionStorage.getItem(TOKEN_KEY) ?? localStorage.getItem(TOKEN_KEY) ?? '';
   },
-  set(token: string): void {
-    localStorage.setItem(TOKEN_KEY, token);
+  set(token: string, remember: boolean): void {
+    localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+    (remember ? localStorage : sessionStorage).setItem(TOKEN_KEY, token);
   },
   clear(): void {
     localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
+  },
+};
+
+/** “记住我”勾选时记住的邮箱（下次打开自动填充；未勾选则清除） */
+export const rememberEmailStore = {
+  get(): string {
+    return localStorage.getItem(REMEMBER_EMAIL_KEY) ?? '';
+  },
+  set(email: string): void {
+    if (email) localStorage.setItem(REMEMBER_EMAIL_KEY, email);
+    else localStorage.removeItem(REMEMBER_EMAIL_KEY);
   },
 };
 
@@ -48,11 +66,13 @@ export const http = createAlova({
   responded: {
     onSuccess: async (response) => {
       if (!response.ok) {
-        // 尽力读取后端错误信息（NestJS 默认 { statusCode, message }）
+        // 尽力读取后端错误信息（NestJS 默认 { statusCode, message }；ValidationPipe 的 message 是数组）
         let message = `HTTP ${response.status}`;
         try {
-          const body = (await response.json()) as { message?: string } | null;
-          if (body?.message) message = String(body.message);
+          const body = (await response.json()) as { message?: string | string[] } | null;
+          const msg = body?.message;
+          if (Array.isArray(msg)) message = msg.join('；');
+          else if (typeof msg === 'string' && msg) message = msg;
         } catch {
           /* body 非 JSON 时保留默认文案 */
         }

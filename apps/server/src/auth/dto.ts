@@ -1,9 +1,11 @@
-import { IsEmail, IsString, Length, MaxLength, MinLength } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, Length, MaxLength, MinLength } from 'class-validator';
+import type { LoginInput, RegisterInput } from '@pigeon/shared-types';
 
 /**
  * 注册入参。校验失败由全局 ValidationPipe 统一返回 400。
+ * captchaId/captchaCode 来自 GET /auth/captcha,一次性使用。
  */
-export class RegisterDto {
+export class RegisterDto implements RegisterInput {
   @IsEmail({}, { message: '邮箱格式不正确' })
   email!: string;
 
@@ -16,13 +18,31 @@ export class RegisterDto {
   @IsString()
   @Length(2, 32, { message: '昵称长度需在 2~32 个字符' })
   nickname!: string;
+
+  @IsString()
+  @IsNotEmpty({ message: '请先获取验证码' })
+  captchaId!: string;
+
+  @IsString()
+  @IsNotEmpty({ message: '请输入验证码' })
+  @MaxLength(16)
+  captchaCode!: string;
 }
 
-export class LoginDto {
+export class LoginDto implements LoginInput {
   @IsEmail({}, { message: '邮箱格式不正确' })
   email!: string;
 
   @IsString()
   @MaxLength(72)
   password!: string;
+
+  @IsString()
+  @IsNotEmpty({ message: '请先获取验证码' })
+  captchaId!: string;
+
+  @IsString()
+  @IsNotEmpty({ message: '请输入验证码' })
+  @MaxLength(16)
+  captchaCode!: string;
 }

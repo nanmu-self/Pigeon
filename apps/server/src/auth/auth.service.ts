@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Inject,
   Injectable,
@@ -6,7 +7,9 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { compare, hash } from 'bcryptjs';
+import type { PublicUser } from '@pigeon/shared-types';
 import { PrismaService } from '../prisma.service.js';
+import { CaptchaService } from './captcha.service.js';
 import type { LoginDto, RegisterDto } from './dto.js';
 
 /** bcrypt 计算成本因子:10 约几十毫秒/次,登录接口可接受 */
@@ -21,13 +24,8 @@ export interface JwtPayload {
   nickname: string;
 }
 
-/** 不含密码哈希的用户公开信息 */
-export interface PublicUser {
-  id: number;
-  email: string;
-  nickname: string;
-  createdAt: string;
-}
+/** 不含密码哈希的用户公开信息(结构定义见 @pigeon/shared-types) */
+export type { PublicUser } from '@pigeon/shared-types';
 
 export interface AuthResult {
   user: PublicUser;
@@ -57,6 +55,7 @@ export class AuthService {
     // 本仓库用 swc/esbuild 编译,不产出装饰器元数据,注入一律显式 @Inject
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(JwtService) private readonly jwt: JwtService,
+    @Inject(CaptchaService) private readonly captcha: CaptchaService,
   ) {}
 
   /**
@@ -64,6 +63,8 @@ export class AuthService {
    * 成功即返回 token(注册即登录),前端无需再调一次 login。
    */
   async register(dto: RegisterDto): Promise<AuthResult> {
+    this.assertCaptcha(dto.captchaId, dto.captchaCode);
+
     const email = dto.email.trim().toLowerCase();
     const nickname = dto.nickname.trim();
 
@@ -87,6 +88,9 @@ export class AuthService {
 
   /** 登录:校验密码哈希并签发 JWT。统一错误文案,避免枚举出已注册邮箱 */
   async login(dto: LoginDto): Promise<AuthResult> {
+    // 验证码放在账号存在性检查之前:错误验证码无法用来探测已注册邮箱
+    this.assertCaptcha(dto.captchaId, dto.captchaCode);
+
     const email = dto.email.trim().toLowerCase();
     const row = await this.prisma.orm.public.User.first({ email });
     if (!row) throw new UnauthorizedException('邮箱或密码错误');
@@ -95,6 +99,13 @@ export class AuthService {
     if (!passwordOk) throw new UnauthorizedException('邮箱或密码错误');
 
     return { user: this.toPublic(row), token: this.signToken(row) };
+  }
+
+  /** 验证码不通过 → 400(一次性消费,重试需换新验证码) */
+  private assertCaptcha(captchaId: string, captchaCode: string): void {
+    if (!this.captcha.verify(captchaId, captchaCode)) {
+      throw new BadRequestException('验证码错误或已过期');
+    }
   }
 
   private toPublic(row: UserRow): PublicUser {

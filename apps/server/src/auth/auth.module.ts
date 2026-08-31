@@ -3,6 +3,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { randomBytes } from 'node:crypto';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { CaptchaService } from './captcha.service.js';
 
 /** token 有效期:7 天 */
 export const JWT_EXPIRES_IN = '7d';
@@ -28,7 +29,7 @@ export function resolveJwtSecret(): string {
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService],
+  providers: [AuthService, CaptchaService],
   exports: [AuthService],
 })
 export class AuthModule {}

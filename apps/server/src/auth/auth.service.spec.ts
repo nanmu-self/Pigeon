@@ -1,4 +1,4 @@
-import { ConflictException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { compare } from 'bcryptjs';
 import { describe, expect, it, vi } from 'vitest';
@@ -24,24 +24,32 @@ function makeService() {
   const ormUser = { first, create };
   const prisma = { orm: { public: { User: ormUser } } };
   const jwt = { sign: vi.fn(() => 'jwt-token') };
-  const service = new AuthService(prisma as never, jwt as unknown as JwtService);
-  return { service, ormUser, jwt, create };
+  const captcha = { verify: vi.fn(() => true) };
+  const service = new AuthService(
+    prisma as never,
+    jwt as unknown as JwtService,
+    captcha as never,
+  );
+  return { service, ormUser, jwt, captcha, create };
 }
 
 const registerDto = (over: Partial<RegisterDto> = {}): RegisterDto => ({
   email: '  Alice@Test.Local  ',
   password: 'sup3r-secret!',
   nickname: '  Alice  ',
+  captchaId: 'captcha-id-1',
+  captchaCode: 'AB12',
   ...over,
 });
 
 describe('AuthService.register', () => {
   it('归一化邮箱/昵称,密码哈希后入库,返回公开用户信息与 token', async () => {
-    const { service, ormUser, jwt, create } = makeService();
+    const { service, ormUser, jwt, captcha, create } = makeService();
 
     const result = await service.register(registerDto());
 
     expect(ormUser.first).toHaveBeenCalledWith({ email: 'alice@test.local' });
+    expect(captcha.verify).toHaveBeenCalledWith('captcha-id-1', 'AB12');
     expect(ormUser.create).toHaveBeenCalledTimes(1);
 
     const stored = create.mock.calls[0][0];
@@ -64,6 +72,17 @@ describe('AuthService.register', () => {
     expect(result.user).not.toHaveProperty('password');
   });
 
+  it('验证码不通过 → 400,且不触发任何账号查询', async () => {
+    const { service, ormUser, captcha } = makeService();
+    captcha.verify.mockReturnValue(false);
+
+    await expect(service.register(registerDto())).rejects.toThrow(BadRequestException);
+    await expect(
+      service.login({ email: 'any@test.local', password: 'whatever-123', captchaId: 'x', captchaCode: 'Y' }),
+    ).rejects.toThrow(BadRequestException);
+    expect(ormUser.first).not.toHaveBeenCalled();
+  });
+
   it('邮箱已存在 → 409', async () => {
     const { service, ormUser } = makeService();
     ormUser.first.mockResolvedValue(baseRow);
@@ -80,7 +99,12 @@ describe('AuthService.login', () => {
     const registered = await service.register(registerDto());
     ormUser.first.mockResolvedValue({ ...baseRow, password: create.mock.calls[0][0].password });
 
-    const result = await service.login({ email: 'Alice@Test.Local', password: 'sup3r-secret!' });
+    const result = await service.login({
+      email: 'Alice@Test.Local',
+      password: 'sup3r-secret!',
+      captchaId: 'captcha-id-1',
+      captchaCode: 'AB12',
+    });
 
     expect(result.user.email).toBe('alice@test.local');
     expect(result.token).toBe(registered.token);
@@ -90,7 +114,7 @@ describe('AuthService.login', () => {
     const { service } = makeService();
 
     await expect(
-      service.login({ email: 'nobody@test.local', password: 'whatever-123' }),
+      service.login({ email: 'nobody@test.local', password: 'whatever-123', captchaId: 'x', captchaCode: 'Y' }),
     ).rejects.toThrow(UnauthorizedException);
   });
 
@@ -103,7 +127,7 @@ describe('AuthService.login', () => {
     });
 
     await expect(
-      service.login({ email: 'alice@test.local', password: 'wrong-password' }),
+      service.login({ email: 'alice@test.local', password: 'wrong-password', captchaId: 'x', captchaCode: 'Y' }),
     ).rejects.toThrow(UnauthorizedException);
   });
 });

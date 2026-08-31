@@ -37,10 +37,13 @@ NestJS 12 API with Prisma 8 (PostgreSQL).
 
 ## Auth
 
-- `POST /auth/register` `{ email, password(8~72), nickname(2~32) }` → `201` `{ user, token }`(密码 bcrypt 哈希入库，邮箱小写归一，重复返回 409)
-- `POST /auth/login` → `200` `{ user, token }`(JWT，有效期 7 天，密钥读 `JWT_SECRET`)
+- `GET /auth/captcha` → `{ captchaId, image }`(PNG dataURL,primecaptcha 生成，一次性、5 分钟有效)
+- `POST /auth/register` `{ email, password(8~72), nickname(2~32), captchaId, captchaCode }` → `201` `{ user, token }`(密码 bcrypt 哈希入库，邮箱小写归一，重复返回 409)
+- `POST /auth/login` `{ email, password, captchaId, captchaCode }` → `200` `{ user, token }`(JWT，有效期 7 天，密钥读 `JWT_SECRET`)
+- 验证码不通过 → 400 且 captchaId 立即作废(一次性，重试需拉新码)；验证码校验先于账号存在性检查，不可用于探测邮箱
 - 入参由全局 ValidationPipe(class-validator)校验：未知字段/格式错误 → 400
 - Socket.IO 握手可携带 `auth.token`，网关验签后绑定 `user:{id}` 房间；`WS_STRICT_AUTH=true` 时无有效 token 直接拒绝
+- 桌面端“记住我”：勾选 → token 存 localStorage(跨重启)；不勾 → sessionStorage(仅会话)
 
 ## Workflow after changing the contract
 

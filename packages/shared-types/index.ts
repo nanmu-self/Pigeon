@@ -26,6 +26,50 @@ export enum MessageType {
 }
 
 // ─────────────────────────────────────────────────────────────
+// 认证（REST /auth/*）契约
+//
+// server 与 desktop 共用：server 端做 DTO 实现与响应，desktop 端做请求与存储。
+// ─────────────────────────────────────────────────────────────
+
+/** 不含密码哈希的用户公开信息 */
+export interface PublicUser {
+  id: number;
+  email: string;
+  nickname: string;
+  createdAt: string;
+}
+
+/** 注册/登录成功响应 */
+export interface AuthResult {
+  user: PublicUser;
+  /** JWT：HTTP 请求放 Authorization: Bearer <token>；WS 握手放 auth.token */
+  token: string;
+}
+
+/** GET /auth/captcha 响应：image 为 PNG dataURL，可直接绑给 <img src> */
+export interface CaptchaChallenge {
+  captchaId: string;
+  image: string;
+}
+
+/** 注册入参（captchaId/captchaCode 由 GET /auth/captcha 获得，一次性） */
+export interface RegisterInput {
+  email: string;
+  password: string;
+  nickname: string;
+  captchaId: string;
+  captchaCode: string;
+}
+
+/** 登录入参 */
+export interface LoginInput {
+  email: string;
+  password: string;
+  captchaId: string;
+  captchaCode: string;
+}
+
+// ─────────────────────────────────────────────────────────────
 // WebSocket (Socket.IO) 事件契约
 //
 // server / desktop 两侧均只做 `import type`（编译期擦除），事件名与载荷
