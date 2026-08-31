@@ -4,6 +4,6 @@
   let { class: className = "" }: { class?: string } = $props();
 </script>
 
-<div class={cn("rounded-lg border border-[var(--p-border)] bg-[var(--p-card)] text-[var(--p-fg)] shadow-sm", className)}>
+<h2 class={cn("text-sm font-semibold text-[var(--p-fg)] tracking-tight", className)}>
   <slot />
-</div>
+</h2>
