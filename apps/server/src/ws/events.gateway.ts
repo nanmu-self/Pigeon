@@ -1,4 +1,3 @@
-import { Logger } from '@nestjs/common';
 import {
   OnGatewayConnection,
   OnGatewayDisconnect,
@@ -7,7 +6,7 @@ import {
   WebSocketGateway,
   WebSocketServer,
 } from '@nestjs/websockets';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Socket } from 'socket.io';
 import type {
   ClientToServerEvents,
@@ -17,8 +16,10 @@ import type {
   WsAckCallback,
   WsChatMessage,
 } from '@pigeon/shared-types';
-import { Inject } from '@nestjs/common';
+import { Inject, Logger } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { allowedOrigins } from '../config.js';
+import type { JwtPayload } from '../auth/auth.service.js';
 import { WsEventsService, type IoServer } from './ws-events.service.js';
 
 /** ack 回调（client → server 事件的最后一个参数） */
@@ -64,6 +65,7 @@ export class EventsGateway
   // WS 消息处理器用普通参数而非 @MessageBody。
   constructor(
     @Inject(WsEventsService) private readonly events: WsEventsService,
+    @Inject(JwtService) private readonly jwt: JwtService,
   ) {}
 
   afterInit(server: IoServer): void {
@@ -75,10 +77,6 @@ export class EventsGateway
   async handleConnection(client: IoSocket): Promise<void> {
     const token = (client.handshake.auth?.token as string | undefined) ?? '';
 
-    // TODO(安全): 接入登录后在此验签 JWT：
-    //   const payload = await this.jwt.verify(token) → { userId, displayName }
-    //   验签失败：client.emit('exception', ...) + client.disconnect(true)
-    // 当前骨架：有 token 时透传为临时身份；无 token 且非 strict 模式则分配游客身份。
     const strict = process.env.WS_STRICT_AUTH === 'true';
     if (!token && strict) {
       this.logger.warn(`rejected unauthenticated handshake ${client.id}`);
@@ -86,13 +84,29 @@ export class EventsGateway
       return;
     }
 
-    // 占位身份：token 的 sha256 前 16 位（不同 token → 不同用户，且不泄露原始 token）。
-    // 接入 JWT 后替换为验签得到的 payload.userId。
-    const userIdFromToken = (t: string) =>
-      `user:${createHash('sha256').update(t).digest('hex').slice(0, 16)}`;
-    client.data.userId = token ? userIdFromToken(token) : `guest:${randomUUID().slice(0, 8)}`;
-    client.data.displayName = client.handshake.auth?.displayName as string | undefined ??
-      client.data.userId;
+    // 验签 JWT(由 POST /auth/login 签发,载荷结构见 auth.service.ts 的 JwtPayload)。
+    // 验签失败:strict 模式直接断开;否则降级为游客身份。
+    let authenticated = false;
+    if (token) {
+      try {
+        const payload = await this.jwt.verifyAsync<JwtPayload>(token);
+        client.data.userId = String(payload.userId);
+        client.data.displayName = payload.nickname;
+        authenticated = true;
+      } catch {
+        if (strict) {
+          this.logger.warn(`rejected handshake with invalid token ${client.id}`);
+          client.disconnect(true);
+          return;
+        }
+        this.logger.warn(`invalid token, falling back to guest: ${client.id}`);
+      }
+    }
+    if (!authenticated) {
+      client.data.userId = `guest:${randomUUID().slice(0, 8)}`;
+      client.data.displayName =
+        (client.handshake.auth?.displayName as string | undefined) ?? client.data.userId;
+    }
     client.data.connectedAt = Date.now();
 
     // 加入个人房间，便于定向推送（后续配合真实登录使用）
