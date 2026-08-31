@@ -200,7 +200,7 @@ pub fn get_messages(
 
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, client_msg_id, created_at
+        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, client_msg_id, created_at
         FROM messages
         WHERE conversation_id = ?1
           AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3))
@@ -231,8 +231,8 @@ pub fn insert_message(
     tx.execute(
         "INSERT INTO messages
              (conversation_id, sender, sender_name, kind, content,
-              client_msg_id, meta, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+              client_msg_id, meta, reply_summary, reactions, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             msg.conversation_id,
             msg.sender,
@@ -241,6 +241,8 @@ pub fn insert_message(
             msg.content,
             msg.client_msg_id,
             msg.meta,
+            msg.reply_summary,
+            msg.reactions,
             msg.status,
             now
         ],
@@ -261,6 +263,9 @@ pub fn insert_message(
         content: msg.content,
         status: msg.status,
         meta: msg.meta,
+        server_msg_id: None,
+        reply_summary: msg.reply_summary,
+        reactions: msg.reactions,
         client_msg_id: msg.client_msg_id,
         created_at: now,
     })
@@ -319,8 +324,8 @@ pub fn upsert_server_message(
     tx.execute(
         "INSERT INTO messages
              (conversation_id, sender, sender_name, kind, content,
-              client_msg_id, server_msg_id, meta, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+              client_msg_id, server_msg_id, meta, reply_summary, reactions, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             m.conversation_id,
             m.sender,
@@ -330,6 +335,8 @@ pub fn upsert_server_message(
             m.client_msg_id,
             m.server_msg_id,
             m.meta,
+            m.reply_summary,
+            m.reactions,
             status,
             m.created_at
         ],
@@ -352,6 +359,9 @@ pub fn upsert_server_message(
             content: m.content.clone(),
             status: status.to_string(),
             meta: m.meta.clone(),
+            server_msg_id: Some(m.server_msg_id.clone()),
+            reply_summary: m.reply_summary.clone(),
+            reactions: m.reactions.clone(),
             client_msg_id: m.client_msg_id.clone(),
             created_at: m.created_at,
         },
@@ -477,7 +487,7 @@ fn fetch_by_server_msg_id(
     server_msg_id: &str,
 ) -> Result<Option<ChatMessage>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, client_msg_id, created_at
+        "SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, client_msg_id, created_at
          FROM messages WHERE server_msg_id = ?1",
     )?;
     let mut rows = stmt.query_map(params![server_msg_id], map_message)?;
@@ -499,7 +509,7 @@ pub fn search_messages(
 
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, client_msg_id, created_at
+        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, client_msg_id, created_at
         FROM messages
         WHERE conversation_id = ?1 AND content LIKE '%' || ?2 || '%'
         ORDER BY created_at DESC, id DESC
@@ -523,8 +533,11 @@ fn map_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage> {
         content: row.get(5)?,
         status: row.get(6)?,
         meta: row.get(7)?,
-        client_msg_id: row.get(8)?,
-        created_at: row.get(9)?,
+        server_msg_id: row.get(8)?,
+        reply_summary: row.get(9)?,
+        reactions: row.get(10)?,
+        client_msg_id: row.get(11)?,
+        created_at: row.get(12)?,
     })
 }
 
@@ -551,6 +564,8 @@ mod tests {
             content: content.to_string(),
             client_msg_id: None,
             meta: None,
+            reply_summary: None,
+            reactions: None,
             status: STATUS_SENT.to_string(),
         }
     }
@@ -630,6 +645,8 @@ mod tests {
             created_at,
             client_msg_id: None,
             meta: None,
+            reply_summary: None,
+            reactions: None,
         };
 
         // 先拉到新页（id 101/102，时间较晚），再回填更早的一页（id 99/100）
@@ -651,6 +668,8 @@ mod tests {
             created_at: 4000,
             client_msg_id: None,
             meta: Some(r#"{"fname":"a.png","size":2048}"#.to_string()),
+            reply_summary: None,
+            reactions: None,
         };
         let r3 = upsert_server_message(&conn, &with_meta).unwrap();
         assert!(r3.inserted);
@@ -686,6 +705,8 @@ mod tests {
             created_at,
             client_msg_id: None,
             meta: None,
+            reply_summary: None,
+            reactions: None,
         };
 
         // 合并三条自己发的消息：尚未任何回执 → 全部 sent
@@ -739,6 +760,8 @@ mod tests {
                 content: "你好".to_string(),
                 client_msg_id: Some("cm-1".to_string()),
                 meta: None,
+                reply_summary: None,
+                reactions: None,
                 status: STATUS_SENDING.to_string(),
             },
         )
@@ -757,6 +780,8 @@ mod tests {
                 created_at: 1234,
                 client_msg_id: Some("cm-1".to_string()),
                 meta: None,
+                reply_summary: None,
+                reactions: None,
             },
         )
         .unwrap();
@@ -794,6 +819,8 @@ mod tests {
                     created_at: id as i64 * 1000,
                     client_msg_id: None,
                     meta: None,
+                    reply_summary: None,
+                    reactions: None,
                 },
             )
             .unwrap();
@@ -814,6 +841,8 @@ mod tests {
                 created_at: 10_000,
                 client_msg_id: None,
                 meta: None,
+                reply_summary: None,
+                reactions: None,
             },
         )
         .unwrap();

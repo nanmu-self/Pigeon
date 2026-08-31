@@ -171,13 +171,15 @@ class SocketManager {
 
   /**
    * 发送消息，resolve 服务端生成的完整消息（含 id/createdAt）；失败 reject。
-   * clientMsgId 由调用方生成（UUID）：网络重试/多端同步时幂等去重。
+   * clientMsgId 由调用方生成（UUID）：网络重试/多端同步时幂等去重；
+   * replyToId = 被引用消息的服务端 id。
    */
   async sendMessage(
     conversationId: string,
     content: string,
     kind: WsChatMessage['kind'] = 'text',
     clientMsgId?: string,
+    replyToId?: string,
   ): Promise<WsChatMessage> {
     const socket = this.requireConnected();
     const res = await socket.emitWithAck('message:send', {
@@ -185,8 +187,22 @@ class SocketManager {
       content,
       kind,
       ...(clientMsgId ? { clientMsgId } : {}),
+      ...(replyToId ? { replyToId } : {}),
     });
     return unwrapAck(res);
+  }
+
+  /** 通用 ack 事件调用（reaction:add/remove 等） */
+  async rawEmitAck(
+    event: 'reaction:add' | 'reaction:remove' | 'message:read',
+    payload: unknown,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const socket = this.requireConnected();
+    // 泛型事件名通道对多态 payload 不友好，此处窄化直调
+    const res = (await (socket as unknown as {
+      emitWithAck: (ev: string, p: unknown) => Promise<{ ok: boolean; error?: string }>;
+    }).emitWithAck(event, payload));
+    return res;
   }
 
   /** 标记会话已读（服务端同时把已读回执推给对端） */

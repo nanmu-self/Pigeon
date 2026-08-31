@@ -115,6 +115,8 @@ pub fn insert_message(
         content: content.to_string(),
         client_msg_id,
         meta,
+        reply_summary: None,
+        reactions: None,
         status: status.unwrap_or_else(|| STATUS_SENT.to_string()),
     };
 
@@ -132,6 +134,7 @@ pub fn send_message(
     client_msg_id: String,
     kind: Option<String>,
     meta: Option<String>,
+    reply_summary: Option<String>,
 ) -> Result<ChatMessage, String> {
     let content = content.trim();
     if content.is_empty() {
@@ -153,6 +156,8 @@ pub fn send_message(
         content: content.to_string(),
         client_msg_id: Some(client_msg_id),
         meta,
+        reply_summary,
+        reactions: None,
         status: STATUS_SENDING.to_string(),
     };
 

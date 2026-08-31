@@ -25,7 +25,7 @@ Pigeon（鸽子）— 端到端加密即时通讯（IM）应用，monorepo：**T
 | `apps/server/src/friends/` | 好友关系（状态机见 `friends.service.ts` 顶部注释）：申请/通过/拒绝/删除/拉黑/解除拉黑；REST `GET /friends`（含在线状态）、`GET /friends/requests`、`POST /friends/requests`、`POST /friends/requests/:id/accept|decline`、`DELETE /friends/:userId`、`POST /friends/:userId/block|unblock`；`assertFriends()` 是发消息/建会话的共享闸门（SessionsService 复用） |
 | `apps/server/src/sessions/` | 会话与消息：`sessions.service.ts`（好友间幂等建会话、发消息事务【消息 + 接收者回实行（含送达）+ 会话活跃指针】、keyset 游标历史分页 + 对端已读/送达水位、WS 推回执）、`sessions.controller.ts`（`GET/POST /sessions`、`GET /sessions/:id/messages?cursor&limit`、`POST /sessions/:id/read`）、`sessions.mapper.ts`（`pgTimestampToMs` 等，有单测）、`dto.ts` |
 | `apps/server/src/ws/` | `events.gateway.ts` — Socket.IO 网关：JWT 握手验签、房间 `user:{userId}` / `conversation:{convId}`、事件 ack；`message:send` 经 SessionsService 事务落库后推双方 user 房间，`message:read` 标记已读并推回执；`ws-events.service.ts` — 全局推送桥 + **presence 注册表**（`markOnline/markOffline/isOnline`，REST 侧据此返回在线状态） |
-| `apps/server/src/prisma/` | `prisma.service.ts` + `contract.prisma`（模型：`User`、`Session` 单聊会话【userAId<userBId 归一化 + 复合唯一】、`Message`【Int 自增游标 + clientMsgId 幂等】、`Friendship` 状态机、`MessageStatus` 每消息×每接收者回实行【复合主键】） |
+| `apps/server/src/prisma/` | `prisma.service.ts` + `contract.prisma`（模型：`User`、`Session` 单聊会话【userAId<userBId 归一化 + 复合唯一 + 双方 lastReadAt 锚点】、`Message`【自增游标 + clientMsgId 幂等 + replyToId 引用】、`Friendship` 状态机、`MessageStatus` 回实行【复合主键 + 送达/已读】、`MessageReaction` 表情回应【messageId+userId+emoji 复合主键，幂等】） |
 | `apps/server/src/config.ts` | `allowedOrigins()` — HTTP CORS 与 Socket.IO CORS 共用白名单，覆盖 Tauri 各平台 origin |
 | `apps/server/src/main.ts` | 入口，`dotenv/config`，默认端口 **3048** |
 | `packages/shared-types` | `@pigeon/shared-types` — 前后端共享类型：`User`、`Message`、`ApiResponse`、`MessageType`、上传契约（`UploadDir` / `UploadTokenInput` / `UploadTicket`），以及**类型化 Socket.IO 事件契约**（`ClientToServerEvents` / `ServerToClientEvents` / `WsAck<T>` / `SocketData`） |
@@ -166,6 +166,7 @@ Rust 侧（Tauri invoke）：
 - ✅ 设置页：头像直传七牛（dir avatar）+ 昵称修改（PATCH /users/me），User 表新增 avatarUrl
 - ✅ 通讯录、消息界面（shadcn-svelte 组件）
 - ✅ 服务端好友关系（搜索/申请/通过/拉黑/删除 + 在线状态）、会话与消息落库（历史分页/未读数/已读回执）、WS 消息事务落库 —— e2e 覆盖（`test/chat.e2e-spec.ts`）
-- ✅ 桌面端消息页接通服务端：会话列表（新聊天选好友建会话）、本地优先 + 异步合并缓存（v2 迁移：server_session_id/水位列/时间索引/server_msg_id 唯一）、optimistic 发送（sending→sent→delivered→read 状态机 + 失败重发）、WS 已读/送达/新消息实时同步
+- ✅ 桌面端消息页接通服务端：会话列表（新聊天选好友建会话）、本地优先 + 异步合并缓存（v4 迁移：server_session_id/水位列/时间索引/server_msg_id 唯一/meta/reply_summary/reactions）、optimistic 发送（sending→sent→delivered→read + 失败重发）、WS 已读/送达/新消息/表情回应实时同步
+- ✅ 图片/文件消息（七牛 dir=chat 直传 + meta 透传）、引用回复（replyToId + 内嵌摘要）、表情回应（reaction:add/remove + reaction:update 增量广播）
 - 🚧 E2EE 接入消息链路（密钥交换协议）；通讯录页接通好友接口
 - ⬜ 离线同步、多媒体消息、群聊、消息撤回/搜索、多设备漫游

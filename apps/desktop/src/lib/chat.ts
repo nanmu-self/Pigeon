@@ -3,6 +3,7 @@
  * 类型与 src-tauri/src/models.rs 保持一致（serde camelCase）。
  */
 import { invoke } from "@tauri-apps/api/core";
+import type { MessageReactionSummary } from '@pigeon/shared-types';
 
 export type ConversationKind = "direct" | "group";
 export type MessageSender = "self" | "other" | "system";
@@ -57,6 +58,10 @@ export interface ServerMessageInput {
   clientMsgId?: string;
   /** 附加信息（JSON 字符串） */
   meta?: string;
+  /** 被引用消息摘要（JSON 字符串） */
+  replySummary?: string;
+  /** 表情回应聚合（JSON 字符串） */
+  reactions?: string;
 }
 
 export interface ChatMessage {
@@ -69,8 +74,14 @@ export interface ChatMessage {
   status: MessageStatus;
   /** image/file 附加信息（JSON 字符串：fname/size/mime…）；文本消息为空 */
   meta: string | null;
+  /** 服务端消息 id（同步后回填；引用回复需要它） */
+  serverMsgId: string | null;
   /** 本机发送的占位键（重发/状态回填关联键；接收消息为空） */
   clientMsgId: string | null;
+  /** 被引用消息摘要（JSON 字符串：{ id, senderName, kind, content }） */
+  replySummary: string | null;
+  /** 表情回应聚合（JSON 字符串：[ { emoji, userIds } ]） */
+  reactions: string | null;
   /** Unix 毫秒时间戳 */
   createdAt: number;
 }
@@ -106,6 +117,7 @@ export const chatApi = {
     clientMsgId: string,
     kind: MessageKind = "text",
     meta?: string,
+    replySummary?: string,
   ) =>
     invoke<ChatMessage>("send_message", {
       conversationId,
@@ -113,6 +125,7 @@ export const chatApi = {
       clientMsgId,
       kind,
       meta,
+      replySummary,
     }),
 
   /** 合并一条服务端消息（幂等：WS 推送 / 历史拉取共用） */
@@ -162,6 +175,34 @@ export function parseMessageMeta(meta: string | null): { fname?: string; size?: 
     return JSON.parse(meta) as { fname?: string; size?: number; mime?: string };
   } catch {
     return {};
+  }
+}
+
+/** 被引用消息摘要安全解析 */
+export function parseReplySummary(
+  replySummary: string | null,
+): { id: string; senderName: string; kind: MessageKind; content: string } | null {
+  if (!replySummary) return null;
+  try {
+    return JSON.parse(replySummary) as { id: string; senderName: string; kind: MessageKind; content: string };
+  } catch {
+    return null;
+  }
+}
+
+/** 表情回应聚合安全解析 */
+export function parseReactions(reactions: string | null): MessageReactionSummary[] {
+  if (!reactions) return [];
+  try {
+    const raw = JSON.parse(reactions) as Array<{ emoji?: unknown; userIds?: unknown }>;
+    return raw
+      .filter((g) => typeof g.emoji === 'string' && Array.isArray(g.userIds))
+      .map((g) => {
+        const userIds = (g.userIds as unknown[]).filter((id): id is string => typeof id === 'string');
+        return { emoji: g.emoji as string, userIds, count: userIds.length };
+      });
+  } catch {
+    return [];
   }
 }
 

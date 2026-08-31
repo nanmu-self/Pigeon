@@ -149,6 +149,24 @@ export type WsAck<T = unknown> = { ok: true; data: T } | { ok: false; error: str
 /** 事件 ack 回调（client → server 事件的最后一个参数） */
 export type WsAckCallback<T = unknown> = (res: WsAck<T>) => void;
 
+/** 消息引用预览（渲染引用块用；服务端在发送/历史时内嵌） */
+export interface MessageReplySummary {
+  /** 被引用消息的 id */
+  id: string;
+  senderName: string;
+  kind: 'text' | 'image' | 'file' | 'system';
+  /** 被引用消息的正文/外链（UI 截断展示） */
+  content: string;
+}
+
+/** 表情回应聚合（按 emoji 分组） */
+export interface MessageReactionSummary {
+  emoji: string;
+  count: number;
+  /** 点了该 emoji 的用户 id（含自己，UI 据此高亮） */
+  userIds: string[];
+}
+
 /** 跨端传输的聊天消息载荷 */
 export interface WsChatMessage {
   id: string;
@@ -162,6 +180,10 @@ export interface WsChatMessage {
    * E2EE 接入后可携带加密信封。服务端不解析，透传存储。
    */
   meta?: Record<string, unknown> | null;
+  /** 引用预览（仅回复消息携带） */
+  replyTo?: MessageReplySummary | null;
+  /** 表情回应聚合（历史下发携带；实时变化走 reaction:update） */
+  reactions?: MessageReactionSummary[];
   /** Unix 毫秒时间戳 */
   createdAt: number;
 }
@@ -270,6 +292,16 @@ export interface WsDeliveredReceipt {
   deliveredAt: number;
 }
 
+/** S2C 表情回应增量更新（add/remove） */
+export interface WsReactionUpdate {
+  conversationId: string;
+  messageId: string;
+  emoji: string;
+  /** 操作者 */
+  userId: string;
+  action: 'add' | 'remove';
+}
+
 export interface WsTypingState {
   conversationId: string;
   userId: string;
@@ -294,6 +326,7 @@ export interface ServerToClientEvents {
   'message:new': (payload: WsChatMessage) => void;
   'message:read': (payload: WsReadReceipt) => void;
   'message:delivered': (payload: WsDeliveredReceipt) => void;
+  'reaction:update': (payload: WsReactionUpdate) => void;
   'typing:update': (payload: WsTypingState) => void;
   'presence:update': (payload: WsPresenceState) => void;
   'friend:request': (payload: WsFriendRequest) => void;
@@ -319,6 +352,8 @@ export interface ClientToServerEvents {
       clientMsgId?: string;
       /** image/file 消息的附加信息（fname/size/mime），≤4KB 的 JSON 对象 */
       meta?: Record<string, unknown>;
+      /** 引用回复：被引用消息的 id（必须同会话） */
+      replyToId?: string;
     },
     ack: WsAckCallback<WsChatMessage>,
   ) => void;
@@ -326,6 +361,15 @@ export interface ClientToServerEvents {
   'message:read': (
     payload: { conversationId: string },
     ack: WsAckCallback<MessageReadAck>,
+  ) => void;
+  /** 表情回应（成员互动；服务端广播 reaction:update 给双方） */
+  'reaction:add': (
+    payload: { conversationId: string; messageId: string; emoji: string },
+    ack: WsAckCallback<null>,
+  ) => void;
+  'reaction:remove': (
+    payload: { conversationId: string; messageId: string; emoji: string },
+    ack: WsAckCallback<null>,
   ) => void;
   'typing:start': (payload: { conversationId: string; displayName?: string }) => void;
   'typing:stop': (payload: { conversationId: string }) => void;

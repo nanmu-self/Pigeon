@@ -12,6 +12,10 @@
       "model": "Message",
       "namespace": "public"
     },
+    "messageReaction": {
+      "model": "MessageReaction",
+      "namespace": "public"
+    },
     "messageStatus": {
       "model": "MessageStatus",
       "namespace": "public"
@@ -287,6 +291,13 @@
                   "kind": "scalar"
                 }
               },
+              "replyToId": {
+                "nullable": true,
+                "type": {
+                  "codecId": "pg/int4@1",
+                  "kind": "scalar"
+                }
+              },
               "senderId": {
                 "nullable": true,
                 "type": {
@@ -303,6 +314,51 @@
               }
             },
             "relations": {
+              "reactions": {
+                "cardinality": "1:N",
+                "on": {
+                  "localFields": [
+                    "id"
+                  ],
+                  "targetFields": [
+                    "messageId"
+                  ]
+                },
+                "to": {
+                  "model": "MessageReaction",
+                  "namespace": "public"
+                }
+              },
+              "replies": {
+                "cardinality": "1:N",
+                "on": {
+                  "localFields": [
+                    "id"
+                  ],
+                  "targetFields": [
+                    "replyToId"
+                  ]
+                },
+                "to": {
+                  "model": "Message",
+                  "namespace": "public"
+                }
+              },
+              "replyTo": {
+                "cardinality": "N:1",
+                "on": {
+                  "localFields": [
+                    "replyToId"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "Message",
+                  "namespace": "public"
+                }
+              },
               "sender": {
                 "cardinality": "N:1",
                 "on": {
@@ -369,6 +425,9 @@
                 "meta": {
                   "column": "meta"
                 },
+                "replyToId": {
+                  "column": "replyToId"
+                },
                 "senderId": {
                   "column": "senderId"
                 },
@@ -378,6 +437,88 @@
               },
               "namespaceId": "public",
               "table": "message"
+            }
+          },
+          "MessageReaction": {
+            "fields": {
+              "createdAt": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "kind": "scalar"
+                }
+              },
+              "emoji": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/text@1",
+                  "kind": "scalar"
+                }
+              },
+              "messageId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/int4@1",
+                  "kind": "scalar"
+                }
+              },
+              "userId": {
+                "nullable": false,
+                "type": {
+                  "codecId": "pg/int4@1",
+                  "kind": "scalar"
+                }
+              }
+            },
+            "relations": {
+              "message": {
+                "cardinality": "N:1",
+                "on": {
+                  "localFields": [
+                    "messageId"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "Message",
+                  "namespace": "public"
+                }
+              },
+              "user": {
+                "cardinality": "N:1",
+                "on": {
+                  "localFields": [
+                    "userId"
+                  ],
+                  "targetFields": [
+                    "id"
+                  ]
+                },
+                "to": {
+                  "model": "User",
+                  "namespace": "public"
+                }
+              }
+            },
+            "storage": {
+              "fields": {
+                "createdAt": {
+                  "column": "createdAt"
+                },
+                "emoji": {
+                  "column": "emoji"
+                },
+                "messageId": {
+                  "column": "messageId"
+                },
+                "userId": {
+                  "column": "userId"
+                }
+              },
+              "namespaceId": "public",
+              "table": "messageReaction"
             }
           },
           "MessageStatus": {
@@ -1019,6 +1160,11 @@
                   "nativeType": "json",
                   "nullable": true
                 },
+                "replyToId": {
+                  "codecId": "pg/int4@1",
+                  "nativeType": "int4",
+                  "nullable": true
+                },
                 "senderId": {
                   "codecId": "pg/int4@1",
                   "nativeType": "int4",
@@ -1062,9 +1208,34 @@
                     "namespaceId": "public",
                     "tableName": "user"
                   }
+                },
+                {
+                  "onDelete": "setNull",
+                  "source": {
+                    "columns": [
+                      "replyToId"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "message"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "message"
+                  }
                 }
               ],
               "indexes": [
+                {
+                  "columns": [
+                    "replyToId"
+                  ],
+                  "name": "message_replyToId_idx_f2e7fcdc",
+                  "prefix": "message_replyToId_idx",
+                  "unique": false
+                },
                 {
                   "columns": [
                     "senderId"
@@ -1104,6 +1275,95 @@
                   ]
                 }
               ]
+            },
+            "messageReaction": {
+              "columns": {
+                "createdAt": {
+                  "codecId": "pg/timestamptz-string@1",
+                  "default": {
+                    "expression": "now()",
+                    "kind": "function"
+                  },
+                  "nativeType": "timestamptz",
+                  "nullable": false
+                },
+                "emoji": {
+                  "codecId": "pg/text@1",
+                  "nativeType": "text",
+                  "nullable": false
+                },
+                "messageId": {
+                  "codecId": "pg/int4@1",
+                  "nativeType": "int4",
+                  "nullable": false
+                },
+                "userId": {
+                  "codecId": "pg/int4@1",
+                  "nativeType": "int4",
+                  "nullable": false
+                }
+              },
+              "foreignKeys": [
+                {
+                  "onDelete": "cascade",
+                  "source": {
+                    "columns": [
+                      "messageId"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "messageReaction"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "message"
+                  }
+                },
+                {
+                  "source": {
+                    "columns": [
+                      "userId"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "messageReaction"
+                  },
+                  "target": {
+                    "columns": [
+                      "id"
+                    ],
+                    "namespaceId": "public",
+                    "tableName": "user"
+                  }
+                }
+              ],
+              "indexes": [
+                {
+                  "columns": [
+                    "messageId"
+                  ],
+                  "name": "messageReaction_messageId_idx_3cdded8d",
+                  "prefix": "messageReaction_messageId_idx",
+                  "unique": false
+                },
+                {
+                  "columns": [
+                    "userId"
+                  ],
+                  "name": "messageReaction_userId_idx_a489d58a",
+                  "prefix": "messageReaction_userId_idx",
+                  "unique": false
+                }
+              ],
+              "primaryKey": {
+                "columns": [
+                  "messageId",
+                  "userId",
+                  "emoji"
+                ]
+              },
+              "uniques": []
             },
             "messageStatus": {
               "columns": {
@@ -1461,7 +1721,7 @@
         "kind": "postgres-schema"
       }
     },
-    "storageHash": "5c60987d50c4b3b9ad489f653b8ea0bad5cbecc2885cb18158fbd64033b6b746"
+    "storageHash": "86d71b7cf2cea00d5c9dd1167df36c56716df761de7b6359645201746d1b3057"
   },
   "execution": {
     "executionHash": "410b14ad278f3c4f2ef1b7e0e449ed69d4d5505a49d36e38af1c0be620f3c1f5",

@@ -95,6 +95,10 @@ pub struct NewMessage {
     pub status: String,
     /// image/file 附加信息（JSON 字符串）
     pub meta: Option<String>,
+    /// 被引用消息摘要（JSON 字符串）
+    pub reply_summary: Option<String>,
+    /// 表情回应聚合（JSON 字符串）
+    pub reactions: Option<String>,
 }
 
 /// 聊天消息
@@ -113,8 +117,14 @@ pub struct ChatMessage {
     pub status: String,
     /// image/file 附加信息（JSON 字符串：fname/size/mime…）；文本消息为空
     pub meta: Option<String>,
-    /// 本机发送的 optimistic 占位键（发送/重发/状态回填的关联键；接收消息为空）
+    /// 服务端消息 id（同步后回填；引用回复需要它作为 replyToId）
+    pub server_msg_id: Option<String>,
+    /// 本机发送的占位键（发送/重发/状态回填的关联键；接收消息为空）
     pub client_msg_id: Option<String>,
+    /// 被引用消息摘要（JSON 字符串：{ id, senderName, kind, content }）
+    pub reply_summary: Option<String>,
+    /// 表情回应聚合（JSON 字符串：[ { emoji, userIds } ]）
+    pub reactions: Option<String>,
     /// Unix 毫秒时间戳
     pub created_at: i64,
 }
@@ -136,6 +146,10 @@ pub struct ServerMessage {
     pub client_msg_id: Option<String>,
     /// 附加信息（JSON 字符串）
     pub meta: Option<String>,
+    /// 被引用消息摘要（JSON 字符串）
+    pub reply_summary: Option<String>,
+    /// 表情回应聚合（JSON 字符串）
+    pub reactions: Option<String>,
 }
 
 /// 合并结果：inserted = false 表示本地已有（幂等跳过或占位行补全）

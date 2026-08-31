@@ -8,6 +8,8 @@ import {
 import type {
   MessageHistoryPage,
   MessageReadAck,
+  MessageReactionSummary,
+  MessageReplySummary,
   PublicUser,
   SessionSummary,
   WsChatMessage,
@@ -34,6 +36,8 @@ export interface SendMessageParams {
   clientMsgId?: string;
   /** image/file 的附加信息（fname/size/mime…），服务端不解析透传存储 */
   meta?: Record<string, unknown>;
+  /** 引用回复：被引用消息 id（必须同会话） */
+  replyToId?: number;
 }
 
 /** meta 序列化后的字节上限 */
@@ -43,6 +47,15 @@ const MAX_META_LENGTH = 4096;
 const MAX_CONTENT_LENGTH = 4000;
 /** 历史消息单页上限 */
 const MAX_HISTORY_LIMIT = 100;
+
+/** PostgreSQL 唯一约束冲突（23505）：幂等写入路径用于吞掉重复插入 */
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { sqlState?: string }).sqlState === '23505'
+  );
+}
 
 /**
  * 会话与消息服务。
@@ -162,6 +175,28 @@ export class SessionsService {
     }
     if (params.kind === 'system') throw new BadRequestException('system 消息由服务端产生');
 
+    // 引用回复校验：被引用消息必须存在且同会话；预取摘要内嵌进载荷（客户端免二次查询）
+    let replyToId: number | undefined;
+    let replySummary: MessageReplySummary | undefined;
+    if (params.replyToId !== undefined) {
+      if (!Number.isInteger(params.replyToId) || params.replyToId <= 0) {
+        throw new BadRequestException('replyToId 非法');
+      }
+      const replyRow = (await this.prisma.orm.public.Message.first({ id: params.replyToId })) as MessageRow | null;
+      if (!replyRow || replyRow.sessionId !== sessionId) {
+        throw new BadRequestException('被引用的消息不存在');
+      }
+      replyToId = params.replyToId;
+      replySummary = {
+        id: String(replyRow.id),
+        senderName: replyRow.senderId === null
+          ? ''
+          : (await this.prisma.orm.public.User.first({ id: replyRow.senderId }))?.nickname ?? '',
+        kind: replyRow.kind,
+        content: replyRow.content,
+      };
+    }
+
     // meta 校验：仅接受普通对象，序列化体积受限（服务端不解析字段语义）
     let meta: Record<string, unknown> | undefined;
     if (params.meta !== undefined) {
@@ -196,6 +231,7 @@ export class SessionsService {
         ...(clientMsgId ? { clientMsgId } : {}),
         // pg/json 编解码器要求 JsonValue：普通对象按结构兼容透传（字段值已是 JSON 安全类型）
         ...(meta ? { meta: meta as never } : {}),
+        ...(replyToId !== undefined ? { replyToId } : {}),
       })) as MessageRow;
 
       // fan-out 已读回实行：直接单聊只有对端一个接收者（发送者不建行）；
@@ -218,7 +254,7 @@ export class SessionsService {
       return { row, delivered, peerId };
     });
 
-    const chatMessage = toChatMessage(message.row, senderName);
+    const chatMessage = toChatMessage(message.row, senderName, { replyTo: replySummary });
     this.ws.toUser(String(message.peerId), 'message:new', chatMessage);
     this.ws.toUser(String(senderId), 'message:new', chatMessage);
 
@@ -265,11 +301,127 @@ export class SessionsService {
       [userB.id, userB.nickname],
     ]);
 
+    // 表情回应按页聚合（每消息一次索引点查，页 ≤100 条，可接受）
+    const reactionMap = await this.reactionSummariesFor(page.map((r) => r.id));
+
+    // 引用摘要：仅回复消息需要（有 replyToId 的行逐条取；被引用者必是会话成员，昵称走 nameById）
+    const replyMap = new Map<number, MessageReplySummary>();
+    for (const row of page) {
+      if (row.replyToId == null) continue;
+      const replyRow = (await this.prisma.orm.public.Message.first({ id: row.replyToId })) as MessageRow | null;
+      if (!replyRow) continue;
+      replyMap.set(row.id, {
+        id: String(row.replyToId),
+        senderName: nameById.get(replyRow.senderId ?? -1) ?? '',
+        kind: replyRow.kind,
+        content: replyRow.content,
+      });
+    }
+
     return {
-      messages: page.map((row) => toChatMessage(row, nameById.get(row.senderId ?? -1) ?? '')),
+      messages: page.map((row) =>
+        toChatMessage(row, nameById.get(row.senderId ?? -1) ?? '', {
+          reactions: reactionMap.get(row.id),
+          replyTo: replyMap.get(row.id),
+        }),
+      ),
       hasMore,
       ...await this.peerWatermarks(session, meId),
     };
+  }
+
+  /** 聚合一页消息的表情回应（按 emoji 分组；复合主键保证每人每 emoji 至多一行） */
+  private async reactionSummariesFor(
+    messageIds: number[],
+  ): Promise<Map<number, MessageReactionSummary[]>> {
+    const lists = await Promise.all(
+      messageIds.map((id) =>
+        this.prisma.orm.public.MessageReaction
+          .where({ messageId: id })
+          .select('userId', 'emoji')
+          .all() as unknown as Promise<Array<{ userId: number; emoji: string }>>,
+      ),
+    );
+    const result = new Map<number, MessageReactionSummary[]>();
+    messageIds.forEach((id, i) => {
+      const grouped = new Map<string, string[]>();
+      for (const r of lists[i]) {
+        const userIds = grouped.get(r.emoji) ?? [];
+        userIds.push(String(r.userId));
+        grouped.set(r.emoji, userIds);
+      }
+      if (grouped.size > 0) {
+        result.set(
+          id,
+          [...grouped.entries()].map(([emoji, userIds]) => ({ emoji, count: userIds.length, userIds })),
+        );
+      }
+    });
+    return result;
+  }
+
+  // ── 表情回应 ──────────────────────────────────────────────
+
+  /**
+   * 添加表情回应（幂等：重复 add 静默成功），并向双方 user 房间广播增量更新。
+   * 校验：操作者是会话成员 + 目标消息属于该会话。
+   */
+  async addReaction(userId: number, conversationId: number, messageId: number, emoji: string): Promise<void> {
+    const emojiTrimmed = emoji.trim();
+    if (!emojiTrimmed || emojiTrimmed.length > 32) throw new BadRequestException('emoji 非法');
+    await this.assertMember(conversationId, userId);
+    const message = (await this.prisma.orm.public.Message.first({ id: messageId })) as MessageRow | null;
+    if (!message || message.sessionId !== conversationId) {
+      throw new NotFoundException('消息不存在');
+    }
+
+    try {
+      await this.prisma.orm.public.MessageReaction.create({
+        messageId,
+        userId,
+        emoji: emojiTrimmed,
+      });
+    } catch (error) {
+      // 复合主键冲突 = 已点过 → 幂等成功
+      if (!isUniqueViolation(error)) throw error;
+      return;
+    }
+    this.broadcastReaction(conversationId, messageId, emojiTrimmed, userId, 'add');
+  }
+
+  /** 移除表情回应（不存在则静默），并向双方广播增量更新 */
+  async removeReaction(userId: number, conversationId: number, messageId: number, emoji: string): Promise<void> {
+    const emojiTrimmed = emoji.trim();
+    if (!emojiTrimmed) throw new BadRequestException('emoji 非法');
+    await this.assertMember(conversationId, userId);
+
+    const removed = await this.prisma.orm.public.MessageReaction
+      .where({ messageId, userId, emoji: emojiTrimmed })
+      .delete();
+    if (!removed) return; // 本来就没有 → 静默
+    this.broadcastReaction(conversationId, messageId, emojiTrimmed, userId, 'remove');
+  }
+
+  private broadcastReaction(
+    conversationId: number,
+    messageId: number,
+    emoji: string,
+    userId: number,
+    action: 'add' | 'remove',
+  ): void {
+    // 需要通知双方（发送方 + 操作者的其他设备）：userA/userB 两个个人房间
+    void this.sessionRow(conversationId).then((session) => {
+      if (!session) return;
+      const payload = {
+        conversationId: String(conversationId),
+        messageId: String(messageId),
+        emoji,
+        userId: String(userId),
+        action,
+      };
+      this.ws.toUser(String(session.userAId), 'reaction:update', payload);
+      this.ws.toUser(String(session.userBId), 'reaction:update', payload);
+    });
   }
 
   /**

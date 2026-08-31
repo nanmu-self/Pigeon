@@ -6,6 +6,8 @@
     formatMsgTime,
     formatBytes,
     parseMessageMeta,
+    parseReactions,
+    parseReplySummary,
     type ChatMessage,
   } from "$lib/chat";
   import { serverTimeToMs as pgTimeToMs } from "$lib/api/sessions";
@@ -97,6 +99,25 @@
       e.preventDefault();
       void submit();
     }
+  }
+
+  const QUICK_EMOJIS = ["👍", "❤️", "😂", "🎉", "👀"] as const;
+  let hoverMsgId = $state<number | null>(null);
+
+  function startReply(msg: ChatMessage) {
+    chat.replyTo = msg;
+  }
+
+  function previewText(msg: ChatMessage): string {
+    if (msg.kind === "image") return "[图片]";
+    if (msg.kind === "file") return `[文件] ${parseMessageMeta(msg.meta).fname ?? ""}`;
+    return msg.content;
+  }
+
+  function isMineReaction(msg: ChatMessage, emoji: string): boolean {
+    return parseReactions(msg.reactions).some(
+      (g) => g.emoji === emoji && g.userIds.includes(chat.myUserId),
+    );
   }
 </script>
 
@@ -265,61 +286,107 @@
           <p class="py-6 text-center text-sm text-[var(--p-muted-fg)]">还没有消息，打个招呼吧</p>
         {/if}
         {#each chat.messages as msg (msg.id)}
-          <div class="mb-3 flex {msg.sender === 'self' ? 'justify-end' : 'justify-start'}">
+          <div
+            class="mb-3 flex {msg.sender === 'self' ? 'justify-end' : 'justify-start'}"
+            onmouseenter={() => (hoverMsgId = msg.id)}
+            onmouseleave={() => {
+              if (hoverMsgId === msg.id) hoverMsgId = null;
+            }}
+          >
             {#if msg.sender === 'system'}
               <span class="rounded-full bg-[var(--p-muted)] px-3 py-1 text-xs text-[var(--p-muted-fg)]">{msg.content}</span>
-            {:else if msg.kind === 'image'}
-              <!-- 图片消息：七牛外链直接预览 -->
-              <div class="max-w-[70%]">
-                <img
-                  src={msg.content}
-                  alt={parseMessageMeta(msg.meta).fname ?? '图片'}
-                  class="max-h-[240px] max-w-full cursor-pointer rounded-xl border border-[var(--p-border)] object-contain"
-                  title="点击复制链接"
-                  onclick={() => void copyUrl(msg)}
-                />
-                <div class="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-[var(--p-muted-fg)] {msg.sender === 'self' ? 'justify-end' : ''}">
-                  {#if msg.sender === 'self'}{@render statusTicks(msg)}{/if}
-                  <span>{formatMsgTime(msg.createdAt)}</span>
-                </div>
-              </div>
-            {:else if msg.kind === 'file'}
-              <!-- 文件消息：文件卡片 -->
-              {@const meta = parseMessageMeta(msg.meta)}
-              <div
-                class="flex max-w-[70%] items-center gap-3 rounded-xl border border-[var(--p-border)] bg-[var(--p-card)] px-3.5 py-2.5 {msg.sender === 'self' ? 'rounded-br-sm' : 'rounded-bl-sm'}"
-                title={msg.content}
-              >
-                <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--p-primary-muted)]">
-                  <svg class="h-4.5 w-4.5 text-[var(--p-primary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
-                </div>
-                <div class="min-w-0">
-                  <p class="max-w-[220px] truncate text-sm font-medium text-[var(--p-fg)]">{meta.fname ?? '文件'}</p>
-                  <p class="text-xs text-[var(--p-muted-fg)]">{formatBytes(meta.size ?? 0)} · 点击复制链接</p>
-                </div>
-                <button
-                  class="shrink-0 rounded p-1.5 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
-                  title="复制链接"
-                  onclick={() => void copyUrl(msg)}
-                >
-                  <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-                </button>
-              </div>
-              <div class="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-[var(--p-muted-fg)]">
-                {#if msg.sender === 'self'}{@render statusTicks(msg)}{/if}
-                <span>{formatMsgTime(msg.createdAt)}</span>
-              </div>
             {:else}
-              <div
-                class="group max-w-[70%] rounded-2xl px-3.5 py-2 {msg.sender === 'self'
-                  ? 'rounded-br-sm bg-[var(--p-primary)] text-[var(--p-primary-fg)]'
-                  : 'rounded-bl-sm border border-[var(--p-border)] bg-[var(--p-card)] text-[var(--p-fg)]'}"
-              >
-                <p class="whitespace-pre-wrap break-words text-sm">{msg.content}</p>
-                <div class="mt-0.5 flex items-center justify-end gap-1 text-[10px] {msg.sender === 'self' ? 'text-[var(--p-primary-fg)]/70' : 'text-[var(--p-muted-fg)]'}">
-                  <span>{formatMsgTime(msg.createdAt)}</span>
-                  {@render statusTicks(msg)}
+              {@const replyInfo = parseReplySummary(msg.replySummary)}
+              <div class="relative flex max-w-[70%] flex-col {msg.sender === 'self' ? 'items-end' : 'items-start'}">
+                <!-- 引用预览块 -->
+                {#if replyInfo}
+                  <div
+                    class="mb-1 max-w-full truncate rounded-lg border-l-2 border-[var(--p-primary)] bg-[var(--p-muted)]/60 px-2.5 py-1 text-xs text-[var(--p-muted-fg)]"
+                    title={replyInfo.content}
+                  >
+                    <span class="font-medium">{replyInfo.senderName}</span>
+                    ：{replyInfo.kind === 'image' ? '[图片]' : replyInfo.kind === 'file' ? `[文件] ${replyInfo.content}` : replyInfo.content}
+                  </div>
+                {/if}
+
+                {#if msg.kind === 'image'}
+                  <!-- 图片消息：七牛外链直接预览 -->
+                  <img
+                    src={msg.content}
+                    alt={parseMessageMeta(msg.meta).fname ?? '图片'}
+                    class="max-h-[240px] max-w-full cursor-pointer rounded-xl border border-[var(--p-border)] object-contain"
+                    title="点击复制链接"
+                    onclick={() => void copyUrl(msg)}
+                  />
+                {:else if msg.kind === 'file'}
+                  <!-- 文件消息：文件卡片 -->
+                  {@const meta = parseMessageMeta(msg.meta)}
+                  <div
+                    class="flex items-center gap-3 rounded-xl border border-[var(--p-border)] bg-[var(--p-card)] px-3.5 py-2.5 {msg.sender === 'self' ? 'rounded-br-sm' : 'rounded-bl-sm'}"
+                    title={msg.content}
+                  >
+                    <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--p-primary-muted)]">
+                      <svg class="h-4.5 w-4.5 text-[var(--p-primary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                    </div>
+                    <div class="min-w-0">
+                      <p class="max-w-[220px] truncate text-sm font-medium text-[var(--p-fg)]">{meta.fname ?? '文件'}</p>
+                      <p class="text-xs text-[var(--p-muted-fg)]">{formatBytes(meta.size ?? 0)} · 点击复制链接</p>
+                    </div>
+                    <button
+                      class="shrink-0 rounded p-1.5 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
+                      title="复制链接"
+                      onclick={() => void copyUrl(msg)}
+                    >
+                      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                    </button>
+                  </div>
+                {:else}
+                  <div
+                    class="group rounded-2xl px-3.5 py-2 {msg.sender === 'self'
+                      ? 'rounded-br-sm bg-[var(--p-primary)] text-[var(--p-primary-fg)]'
+                      : 'rounded-bl-sm border border-[var(--p-border)] bg-[var(--p-card)] text-[var(--p-fg)]'}"
+                  >
+                    <p class="whitespace-pre-wrap break-words text-sm">{msg.content}</p>
+                  </div>
+                {/if}
+
+                <!-- 时间 / 状态勾 / 表情回应 chips -->
+                <div class="mt-0.5 flex items-center gap-1 {msg.sender === 'self' ? 'flex-row-reverse' : ''}">
+                  {#if msg.sender === 'self'}{@render statusTicks(msg)}{/if}
+                  <span class="text-[10px] text-[var(--p-muted-fg)]">{formatMsgTime(msg.createdAt)}</span>
+                  {#each parseReactions(msg.reactions) as group (group.emoji)}
+                    <button
+                      class="flex items-center gap-0.5 rounded-full border px-1.5 py-0.5 text-[11px] transition-colors {isMineReaction(msg, group.emoji)
+                        ? 'border-[var(--p-primary)] bg-[var(--p-primary-muted)]'
+                        : 'border-[var(--p-border)] bg-[var(--p-card)]'}"
+                      title={group.userIds.join(', ')}
+                      onclick={() => void chat.toggleReaction(msg, group.emoji)}
+                    >
+                      <span>{group.emoji}</span>
+                      <span class="text-[var(--p-muted-fg)]">{group.count}</span>
+                    </button>
+                  {/each}
                 </div>
+
+                <!-- 悬停操作条：回复 + 快捷 emoji -->
+                {#if hoverMsgId === msg.id && msg.status !== 'sending'}
+                  <div class="absolute top-0 {msg.sender === 'self' ? '-left-2 -translate-x-full' : '-right-2 translate-x-full'} z-10 flex items-center gap-0.5 rounded-full border border-[var(--p-border)] bg-[var(--p-card)] px-1 py-0.5 shadow-md">
+                    <button
+                      class="rounded-full p-1.5 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
+                      title="引用回复"
+                      onclick={() => startReply(msg)}
+                    >
+                      <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+                    </button>
+                    {#each QUICK_EMOJIS as emoji (emoji)}
+                      <button
+                        class="rounded-full p-1 text-sm transition-transform hover:scale-125"
+                        title="回应 {emoji}"
+                        onclick={() => void chat.toggleReaction(msg, emoji)}
+                      >{emoji}</button>
+                    {/each}
+                  </div>
+                {/if}
               </div>
             {/if}
           </div>
@@ -328,6 +395,16 @@
 
       <!-- 输入区 -->
       <div class="border-t border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3">
+        <!-- 回复中状态条 -->
+        {#if chat.replyTo}
+          <div class="mb-2 flex items-center gap-2 rounded-lg border-l-2 border-[var(--p-primary)] bg-[var(--p-muted)]/40 px-3 py-1.5">
+            <svg class="h-3.5 w-3.5 shrink-0 text-[var(--p-primary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+            <span class="min-w-0 flex-1 truncate text-xs text-[var(--p-muted-fg)]">
+              回复 <span class="font-medium">{chat.replyTo.senderName || '我'}</span>：{previewText(chat.replyTo)}
+            </span>
+            <button class="text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]" onclick={() => chat.cancelReply()}>×</button>
+          </div>
+        {/if}
         <!-- 七牛上传进度（进行中显示，可取消） -->
         {#if chat.uploadProgress}
           <div class="mb-2 flex items-center gap-2 rounded-lg border border-[var(--p-border)] bg-[var(--p-muted)]/40 px-3 py-1.5">

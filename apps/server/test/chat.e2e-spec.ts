@@ -428,4 +428,96 @@ describe('聊天链路 (e2e)', () => {
     await socketAlice.disconnect();
     await socketBob.disconnect();
   });
+
+  it('引用回复 + 表情回应', async () => {
+    const sessionId = (globalThis as { __e2eSessionId?: string }).__e2eSessionId;
+    const socketAlice = await connectWs(alice.token);
+    const socketBob = await connectWs(bob.token);
+
+    // 1. bob 引用回复 alice 的第一条消息（服务端校验同会话 + 内嵌摘要）
+    const history0 = await api
+      .get(`/sessions/${sessionId}/messages?limit=1`)
+      .auth(bob.token, { type: 'bearer' });
+    const firstMsgId = (history0.body as MessageHistoryPage).messages[0].id;
+
+    const replyReceived = waitFor<WsChatMessage>(socketAlice, 'message:new');
+    const reply = await emitAck<WsChatMessage>(socketBob, 'message:send', {
+      conversationId: sessionId,
+      content: '收到！',
+      replyToId: firstMsgId,
+      clientMsgId: 'e2e-reply-1',
+    });
+    expect(reply.ok).toBe(true);
+    expect(reply.data?.replyTo?.id).toBe(firstMsgId);
+    expect(reply.data?.replyTo?.senderName).toBe('Bob');
+    expect((await replyReceived).replyTo?.id).toBe(firstMsgId);
+
+    // 2. alice 对 bob 的回复点 👍；重复添加幂等；bob 实时收到 reaction:update
+    const reactionUpdate = waitFor<{ messageId: string; emoji: string; action: string; userId: string }>(
+      socketBob,
+      'reaction:update',
+    );
+    const add1 = await emitAck<null>(socketAlice, 'reaction:add', {
+      conversationId: sessionId,
+      messageId: reply.data?.id,
+      emoji: '👍',
+    });
+    expect(add1.ok).toBe(true);
+    const add2 = await emitAck<null>(socketAlice, 'reaction:add', {
+      conversationId: sessionId,
+      messageId: reply.data?.id,
+      emoji: '👍',
+    });
+    expect(add2.ok).toBe(true); // 幂等
+    const upd = await reactionUpdate;
+    expect(upd).toMatchObject({
+      messageId: reply.data?.id,
+      emoji: '👍',
+      userId: String(alice.user.id),
+      action: 'add',
+    });
+
+    // 3. 历史回读：回复消息带 replyTo + reactions 聚合
+    const history = await api
+      .get(`/sessions/${sessionId}/messages?limit=5`)
+      .auth(bob.token, { type: 'bearer' });
+    const replied = (history.body as MessageHistoryPage).messages.find(
+      (m) => m.id === reply.data?.id,
+    );
+    expect(replied?.replyTo?.id).toBe(firstMsgId);
+    expect(replied?.reactions).toEqual([
+      { emoji: '👍', count: 1, userIds: [String(alice.user.id)] },
+    ]);
+
+    // 4. 取消回应 → 增量 remove
+    const removeUpdate = waitFor<{ action: string }>(socketBob, 'reaction:update');
+    const remove = await emitAck<null>(socketAlice, 'reaction:remove', {
+      conversationId: sessionId,
+      messageId: reply.data?.id,
+      emoji: '👍',
+    });
+    expect(remove.ok).toBe(true);
+    expect((await removeUpdate).action).toBe('remove');
+
+    // 5. 非成员不能回应（charlie 自己连一个 socket）
+    const socketCharlie = await connectWs(charlie.token);
+    const stranger = await emitAck<null>(socketCharlie, 'reaction:add', {
+      conversationId: sessionId,
+      messageId: reply.data?.id,
+      emoji: '👍',
+    });
+    expect(stranger.ok).toBe(false);
+    await socketCharlie.disconnect();
+
+    // 6. 跨会话引用被拒（charlie 对 bob 无会话，直接用 bob 的会话 id 引不存在的消息）
+    const badReply = await emitAck<WsChatMessage>(socketBob, 'message:send', {
+      conversationId: sessionId,
+      content: '跨会话引用',
+      replyToId: '999999',
+    });
+    expect(badReply.ok).toBe(false);
+
+    await socketAlice.disconnect();
+    await socketBob.disconnect();
+  });
 });

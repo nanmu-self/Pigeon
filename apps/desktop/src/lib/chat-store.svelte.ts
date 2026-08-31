@@ -18,12 +18,21 @@
  */
 import type {
   FriendItem,
+  MessageReactionSummary,
   SessionSummary,
   WsChatMessage,
   WsDeliveredReceipt,
+  WsReactionUpdate,
   WsReadReceipt,
 } from '@pigeon/shared-types';
-import { chatApi, type ChatMessage, type Conversation, type MessageKind } from '$lib/chat';
+import {
+  chatApi,
+  parseReactions,
+  parseReplySummary,
+  type ChatMessage,
+  type Conversation,
+  type MessageKind,
+} from '$lib/chat';
 import { sessionsApi } from '$lib/api/sessions';
 import { friendsApi } from '$lib/api/friends';
 import { ws } from '$lib/api/socket.svelte';
@@ -53,6 +62,13 @@ export class ChatStore {
   error = $state<string | null>(null);
   /** 进行中的七牛上传（输入区进度条；null = 无进行中上传） */
   uploadProgress = $state<{ fname: string; percent: number } | null>(null);
+  /** 正在回复的消息（输入区上方预览条；null = 非回复） */
+  replyTo = $state<ChatMessage | null>(null);
+
+  /** 我在服务端的用户 id（WS 握手分配；表情回应高亮判断用） */
+  get myUserId(): string {
+    return ws.userId;
+  }
 
   /** 最近一次服务端拉取页的最早一条消息 id（上滑加载的游标） */
   private oldestFetchedServerId: string | null = null;
@@ -63,7 +79,28 @@ export class ChatStore {
     ws.on('message:new', (m) => void this.onNewMessage(m));
     ws.on('message:read', (r) => void this.onReadReceipt(r));
     ws.on('message:delivered', (r) => void this.onDeliveredReceipt(r));
+    ws.on('reaction:update', (r) => this.onReactionUpdate(r));
     ws.on('presence:update', (p) => this.onPresence(p.userId, p.online));
+  }
+
+  /** 表情回应增量更新：直接改本地行的 reactions JSON */
+  private onReactionUpdate(r: WsReactionUpdate): void {
+    if (this.current?.id !== r.conversationId) return;
+    const target = this.messages.find((m) => m.serverMsgId === r.messageId);
+    if (!target) return;
+    const groups = parseReactions(target.reactions);
+    const g = groups.find((x) => x.emoji === r.emoji);
+    if (r.action === 'add') {
+      if (g) {
+        if (!g.userIds.includes(r.userId)) g.userIds.push(r.userId);
+      } else {
+        groups.push({ emoji: r.emoji, userIds: [r.userId], count: 1 });
+      }
+    } else if (g) {
+      g.userIds = g.userIds.filter((id) => id !== r.userId);
+    }
+    const next = groups.filter((x) => x.userIds.length > 0);
+    this.patchReactions(target.id, next);
   }
 
   // ── 会话列表 ─────────────────────────────────────────────
@@ -173,6 +210,8 @@ export class ChatStore {
         content: m.content,
         createdAt: m.createdAt,
         meta: m.meta ? JSON.stringify(m.meta) : undefined,
+        replySummary: m.replyTo ? JSON.stringify(m.replyTo) : undefined,
+        reactions: m.reactions?.length ? JSON.stringify(m.reactions) : undefined,
       });
     }
   }
@@ -182,7 +221,73 @@ export class ChatStore {
   async send(content: string): Promise<void> {
     const text = content.trim();
     if (!text || !this.current || !this.localConversation) return;
-    await this.stageAndSend('text', text, undefined);
+
+    // 引用回复：带上被引用消息的服务端 id + 本地摘要
+    const replyMsg = this.replyTo;
+    let replySummary: string | undefined;
+    let replyToId: string | undefined;
+    if (replyMsg?.serverMsgId) {
+      replyToId = replyMsg.serverMsgId;
+      replySummary = JSON.stringify({
+        id: replyMsg.serverMsgId,
+        senderName: replyMsg.senderName || (replyMsg.sender === 'self' ? '我' : this.current.peer.nickname),
+        kind: replyMsg.kind,
+        content: replyMsg.content,
+      });
+    }
+    this.replyTo = null;
+    await this.stageAndSend('text', text, undefined, undefined, replySummary, replyToId);
+  }
+
+  cancelReply(): void {
+    this.replyTo = null;
+  }
+
+  /** 表情回应 toggle：已点 → remove；未点 → add（本地乐观更新，失败重读本地） */
+  async toggleReaction(msg: ChatMessage, emoji: string): Promise<void> {
+    if (!this.current) return;
+    const myId = ws.userId;
+    const groups = parseReactions(msg.reactions);
+    const g = groups.find((x) => x.emoji === emoji);
+    const mine = g !== undefined && g.userIds.includes(myId);
+
+    // 本地乐观更新
+    if (g && mine) {
+      const next: MessageReactionSummary = {
+        ...g,
+        userIds: g.userIds.filter((id) => id !== myId),
+        count: g.count - 1,
+      };
+      this.patchReactions(
+        msg.id,
+        next.userIds.length > 0
+          ? groups.map((x) => (x === g ? next : x))
+          : groups.filter((x) => x !== g),
+      );
+    } else if (g) {
+      this.patchReactions(
+        msg.id,
+        groups.map((x) => (x === g ? { ...x, userIds: [...x.userIds, myId], count: x.count + 1 } : x)),
+      );
+    } else {
+      this.patchReactions(msg.id, [...groups, { emoji, userIds: [myId], count: 1 }]);
+    }
+
+    try {
+      const payload = { conversationId: this.current.id, messageId: msg.serverMsgId ?? '', emoji };
+      const res = mine
+        ? await ws.rawEmitAck('reaction:remove', payload)
+        : await ws.rawEmitAck('reaction:add', payload);
+      if (!res.ok) throw new Error(res.error);
+    } catch {
+      await this.reloadLocal(); // 失败回读本地（乐观更新回滚）
+    }
+  }
+
+  private patchReactions(messageId: number, groups: MessageReactionSummary[]): void {
+    this.messages = this.messages.map((m) =>
+      m.id === messageId ? { ...m, reactions: groups.length ? JSON.stringify(groups) : null } : m,
+    );
   }
 
   /**
@@ -238,6 +343,8 @@ export class ChatStore {
     content: string,
     meta?: Record<string, unknown>,
     clientMsgId: string = crypto.randomUUID(),
+    replySummary?: string,
+    replyToId?: string,
   ): Promise<void> {
     if (!this.current || !this.localConversation) return;
     const staged = await chatApi.sendMessage(
@@ -246,9 +353,10 @@ export class ChatStore {
       clientMsgId,
       kind,
       meta ? JSON.stringify(meta) : undefined,
+      replySummary,
     );
     this.messages = [...this.messages, staged];
-    await this.dispatch(clientMsgId, content, kind, meta);
+    await this.dispatch(clientMsgId, content, kind, meta, replyToId);
   }
 
   /** WS 发送；ack 后回填服务端 id/时间 → sent；失败置 failed */
@@ -257,11 +365,12 @@ export class ChatStore {
     content: string,
     kind: MessageKind,
     meta?: Record<string, unknown>,
+    replyToId?: string,
   ): Promise<void> {
     const current = this.current;
     if (!current) return;
     try {
-      const ack = await ws.sendMessage(current.id, content, kind, clientMsgId);
+      const ack = await ws.sendMessage(current.id, content, kind, clientMsgId, replyToId);
       const confirmed = await chatApi.acknowledgeMessage(clientMsgId, ack.id, ack.createdAt);
       this.replaceLocal(confirmed);
       this.error = null;
@@ -335,6 +444,8 @@ export class ChatStore {
       content: m.content,
       createdAt: m.createdAt,
       meta: m.meta ? JSON.stringify(m.meta) : undefined,
+      replySummary: m.replyTo ? JSON.stringify(m.replyTo) : undefined,
+      reactions: m.reactions?.length ? JSON.stringify(m.reactions) : undefined,
     });
 
     if (this.current?.id === m.conversationId) {

@@ -207,10 +207,11 @@ export class EventsGateway
       kind?: WsChatMessage['kind'];
       clientMsgId?: string;
       meta?: Record<string, unknown>;
+      replyToId?: string;
     },
     ack?: Ack<WsChatMessage>,
   ): Promise<void> {
-    const { conversationId, content, kind, clientMsgId, meta } = payload;
+    const { conversationId, content, kind, clientMsgId, meta, replyToId } = payload;
     if (!conversationId || !content?.trim()) {
       ack?.({ ok: false, error: 'conversationId and content are required' });
       return;
@@ -229,6 +230,15 @@ export class EventsGateway
       ack?.({ ok: false, error: '不支持的消息类型' });
       return;
     }
+    // 引用回复：string → number（服务端校验存在性/同会话）
+    let replyToIdNum: number | undefined;
+    if (replyToId !== undefined) {
+      replyToIdNum = Number(replyToId);
+      if (!Number.isInteger(replyToIdNum) || replyToIdNum <= 0) {
+        ack?.({ ok: false, error: 'replyToId 非法' });
+        return;
+      }
+    }
 
     try {
       const message = await this.sessions.sendMessage({
@@ -239,9 +249,62 @@ export class EventsGateway
         kind: kind ?? 'text',
         ...(clientMsgId ? { clientMsgId } : {}),
         ...(meta ? { meta } : {}),
+        ...(replyToIdNum !== undefined ? { replyToId: replyToIdNum } : {}),
       });
       // 先 ack（发送方获得回执）；message:new 由服务层推给双方所有设备
       ack?.({ ok: true, data: message });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
+
+  // ── 表情回应 ─────────────────────────────────────────────
+
+  @SubscribeMessage('reaction:add')
+  async onReactionAdd(
+    client: IoSocket,
+    payload: { conversationId: string; messageId: string; emoji: string },
+    ack?: Ack<null>,
+  ): Promise<void> {
+    const userId = Number(client.data.userId);
+    if (!Number.isInteger(userId)) {
+      ack?.({ ok: false, error: '游客不能回应，请先登录' });
+      return;
+    }
+    const conversationId = Number(payload?.conversationId);
+    const messageId = Number(payload?.messageId);
+    if (!Number.isInteger(conversationId) || !Number.isInteger(messageId)) {
+      ack?.({ ok: false, error: 'conversationId and messageId are required' });
+      return;
+    }
+    try {
+      await this.sessions.addReaction(userId, conversationId, messageId, payload.emoji ?? '');
+      ack?.({ ok: true, data: null });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
+
+  @SubscribeMessage('reaction:remove')
+  async onReactionRemove(
+    client: IoSocket,
+    payload: { conversationId: string; messageId: string; emoji: string },
+    ack?: Ack<null>,
+  ): Promise<void> {
+    const userId = Number(client.data.userId);
+    if (!Number.isInteger(userId)) {
+      ack?.({ ok: false, error: '游客没有回应状态，请先登录' });
+      return;
+    }
+    const conversationId = Number(payload?.conversationId);
+    const messageId = Number(payload?.messageId);
+    if (!Number.isInteger(conversationId) || !Number.isInteger(messageId)) {
+      ack?.({ ok: false, error: 'conversationId and messageId are required' });
+      return;
+    }
+    try {
+      await this.sessions.removeReaction(userId, conversationId, messageId, payload.emoji ?? '');
+      ack?.({ ok: true, data: null });
     } catch (error) {
       ack?.({ ok: false, error: this.errorText(error) });
     }

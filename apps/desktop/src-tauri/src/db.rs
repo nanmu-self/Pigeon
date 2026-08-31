@@ -167,5 +167,23 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    // v4：引用回复 + 表情回应 —— 本地缓存两列（均为前端序列化的 JSON 字符串）
+    if version < 4 {
+        conn.execute_batch(
+            r#"
+            BEGIN;
+
+            -- 被引用消息摘要：{ id, senderName, kind, content }
+            ALTER TABLE messages ADD COLUMN reply_summary TEXT;
+            -- 表情回应聚合：[ { emoji, userIds: [...] } ]
+            ALTER TABLE messages ADD COLUMN reactions TEXT;
+
+            PRAGMA user_version = 4;
+
+            COMMIT;
+            "#,
+        )?;
+    }
+
     Ok(())
 }
