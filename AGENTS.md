@@ -166,7 +166,8 @@ Rust 侧（Tauri invoke）：
 - ✅ 设置页：头像直传七牛（dir avatar）+ 昵称修改（PATCH /users/me），User 表新增 avatarUrl
 - ✅ 通讯录、消息界面（shadcn-svelte 组件）
 - ✅ 服务端好友关系（搜索/申请/通过/拉黑/删除 + 在线状态）、会话与消息落库（历史分页/未读数/已读回执）、WS 消息事务落库 —— e2e 覆盖（`test/chat.e2e-spec.ts`）
-- ✅ 桌面端消息页接通服务端：会话列表（新聊天选好友建会话）、本地优先 + 异步合并缓存（v4 迁移：server_session_id/水位列/时间索引/server_msg_id 唯一/meta/reply_summary/reactions）、optimistic 发送（sending→sent→delivered→read + 失败重发）、WS 已读/送达/新消息/表情回应实时同步
+- ✅ 桌面端消息页接通服务端：会话列表（新聊天选好友建会话）、本地优先 + 异步合并缓存（v5 迁移：server_session_id/水位列/时间索引/server_msg_id 唯一/meta/reply_summary/reactions/recalled）、optimistic 发送（sending→sent→delivered→read + 失败重发）、WS 已读/送达/新消息/表情回应/撤回实时同步
 - ✅ 图片/文件消息（七牛 dir=chat 直传 + meta 透传）、引用回复（replyToId + 内嵌摘要）、表情回应（reaction:add/remove + reaction:update 增量广播）
 - 🚧 E2EE 接入消息链路（密钥交换协议）；通讯录页接通好友接口
-- ⬜ 离线同步、多媒体消息、群聊、消息撤回/搜索、多设备漫游
+- ✅ 消息撤回（2 分钟窗口、仅发送者，REST + message:recalled 广播，撤回即清空 content/meta）
+- ⬜ 离线同步、群聊、消息搜索、多设备漫游
