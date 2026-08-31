@@ -3,13 +3,55 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/stores";
+  import { ws } from "$lib/api/socket.svelte";
+  import { serverApi } from "$lib/api/http";
 
   // ── State ────────────────────────────────────────────────
   let commandOpen = $state(false);
   let perfMode = $state(false);
+  /** alova 探活的 HTTP 往返延迟（ms） */
+  let apiLatency = $state<number | null>(null);
+
+  // ── 服务端连接（Socket.IO + HTTP 探活） ────────
+  async function probeApi() {
+    const t0 = performance.now();
+    try {
+      await serverApi.health();
+      apiLatency = Math.round(performance.now() - t0);
+    } catch {
+      apiLatency = null;
+    }
+  }
+
+  const wsLabel = $derived(
+    {
+      idle: "WS 未连接",
+      connecting: "WS 连接中…",
+      connected: "WS 已连接",
+      reconnecting: "WS 重连中…",
+      disconnected: "WS 已断开",
+    }[ws.state]
+  );
+  const wsDotClass = $derived(
+    {
+      idle: "bg-[var(--p-muted-fg)]",
+      connecting: "bg-amber-400 animate-pulse",
+      connected: "bg-green-500",
+      reconnecting: "bg-amber-400 animate-pulse",
+      disconnected: "bg-red-400",
+    }[ws.state]
+  );
 
   $effect(() => {
     document.documentElement.classList.toggle("perf-mode", perfMode);
+  });
+
+  // ── 服务端连接（Socket.IO 自动重连；登录落地后改在登录成功处 connect） ──
+  onMount(() => {
+    ws.connect();
+    void probeApi();
+    const timer = setInterval(probeApi, 30_000);
+    return () => clearInterval(timer);
   });
 
   // ── Tauri window controls ────────────────────────────────
@@ -135,8 +177,12 @@
   <!-- ══ Status Bar ═════════════════════════════════════ -->
   <footer class="flex h-7 shrink-0 items-center border-t border-[var(--p-border)] bg-[var(--p-card)] px-3 font-mono select-none">
     <div class="flex items-center gap-1.5">
-      <span></span>
-      <span class="text-[11px] text-[var(--p-muted-fg)]">12ms</span>
+      <span class={cn("h-2 w-2 rounded-full", wsDotClass)} title={wsLabel}></span>
+      <span class="text-[11px] text-[var(--p-muted-fg)]">{wsLabel}</span>
+      <span class="text-[var(--p-border)]">·</span>
+      <span class="text-[11px] text-[var(--p-muted-fg)] tabular-nums">
+        API {apiLatency == null ? "—" : `${apiLatency}ms`}
+      </span>
       <svg class="h-3 w-3 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
       </svg>

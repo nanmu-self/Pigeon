@@ -13,13 +13,16 @@
   },
   "license": "MIT",
   "dependencies": {
+    "@lucide/svelte": "^1.38.0",
+    "@pigeon/shared-types": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
+    "alova": "^3.5.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-svelte": "^1.0.0",
     "shadcn-svelte": "^1.5.1",
+    "socket.io-client": "^4.8.3",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.3"
   },
