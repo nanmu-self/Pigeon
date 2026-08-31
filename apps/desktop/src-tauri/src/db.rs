@@ -185,5 +185,20 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
         )?;
     }
 
+    // v5：消息撤回标记（撤回时 content/meta 已清空，此列驱动 UI 渲染撤回占位）
+    if version < 5 {
+        conn.execute_batch(
+            r#"
+            BEGIN;
+
+            ALTER TABLE messages ADD COLUMN recalled INTEGER NOT NULL DEFAULT 0;
+
+            PRAGMA user_version = 5;
+
+            COMMIT;
+            "#,
+        )?;
+    }
+
     Ok(())
 }

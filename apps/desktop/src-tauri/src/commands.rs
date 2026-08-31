@@ -117,6 +117,7 @@ pub fn insert_message(
         meta,
         reply_summary: None,
         reactions: None,
+        recalled: false,
         status: status.unwrap_or_else(|| STATUS_SENT.to_string()),
     };
 
@@ -158,6 +159,7 @@ pub fn send_message(
         meta,
         reply_summary,
         reactions: None,
+        recalled: false,
         status: STATUS_SENDING.to_string(),
     };
 
@@ -200,6 +202,13 @@ pub fn mark_message_failed(state: State<Db>, client_msg_id: String) -> Result<()
 pub fn retry_message(state: State<Db>, client_msg_id: String) -> Result<(), String> {
     let conn = lock(&state)?;
     chat::retry_message(&conn, &client_msg_id).map_err(|e| e.to_string())
+}
+
+/// 本地应用撤回（按服务端消息 id，幂等）：清空内容/meta + 打撤回标记
+#[tauri::command]
+pub fn apply_recalled(state: State<Db>, server_msg_id: String) -> Result<bool, String> {
+    let conn = lock(&state)?;
+    chat::apply_recalled(&conn, &server_msg_id).map_err(|e| e.to_string())
 }
 
 /// 推进对端已读/送达水位（只前进不后退）并物化己方消息状态

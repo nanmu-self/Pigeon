@@ -62,6 +62,8 @@ export interface ServerMessageInput {
   replySummary?: string;
   /** 表情回应聚合（JSON 字符串） */
   reactions?: string;
+  /** 服务端已撤回 */
+  recalled?: boolean;
 }
 
 export interface ChatMessage {
@@ -82,6 +84,8 @@ export interface ChatMessage {
   replySummary: string | null;
   /** 表情回应聚合（JSON 字符串：[ { emoji, userIds } ]） */
   reactions: string | null;
+  /** 是否已撤回（content/meta 已清空，UI 渲染撤回占位） */
+  recalled: boolean;
   /** Unix 毫秒时间戳 */
   createdAt: number;
 }
@@ -142,6 +146,10 @@ export const chatApi = {
   /** 重试失败的消息：status 置回 sending（随后走正常 ack 回填） */
   retryMessage: (clientMsgId: string) =>
     invoke<void>("retry_message", { clientMsgId }),
+
+  /** 本地应用撤回（按服务端消息 id，幂等）：清空内容/meta + 打撤回标记 */
+  applyRecalled: (serverMsgId: string) =>
+    invoke<boolean>("apply_recalled", { serverMsgId }),
 
   /** 推进对端已读/送达水位（只前进不后退）并物化己方消息状态 */
   setPeerWatermarks: (

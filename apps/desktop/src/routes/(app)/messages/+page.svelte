@@ -119,6 +119,16 @@
       (g) => g.emoji === emoji && g.userIds.includes(chat.myUserId),
     );
   }
+
+  /** 是否可撤回：自己发的、已同步、未撤回、2 分钟内 */
+  function canRecall(msg: ChatMessage): boolean {
+    return (
+      msg.sender === 'self' &&
+      msg.serverMsgId !== null &&
+      !msg.recalled &&
+      Date.now() - msg.createdAt <= 2 * 60 * 1000
+    );
+  }
 </script>
 
 {#snippet statusTicks(msg: ChatMessage)}
@@ -293,8 +303,10 @@
               if (hoverMsgId === msg.id) hoverMsgId = null;
             }}
           >
-            {#if msg.sender === 'system'}
-              <span class="rounded-full bg-[var(--p-muted)] px-3 py-1 text-xs text-[var(--p-muted-fg)]">{msg.content}</span>
+            {#if msg.sender === 'system' || msg.recalled}
+              <span class="rounded-full bg-[var(--p-muted)] px-3 py-1 text-xs text-[var(--p-muted-fg)]">
+                {msg.recalled ? (msg.sender === 'self' ? '你撤回了一条消息' : `${msg.senderName} 撤回了一条消息`) : msg.content}
+              </span>
             {:else}
               {@const replyInfo = parseReplySummary(msg.replySummary)}
               <div class="relative flex max-w-[70%] flex-col {msg.sender === 'self' ? 'items-end' : 'items-start'}">
@@ -378,6 +390,15 @@
                     >
                       <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
                     </button>
+                    {#if canRecall(msg)}
+                      <button
+                        class="rounded-full p-1.5 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-red-500"
+                        title="撤回（2 分钟内）"
+                        onclick={() => void chat.recall(msg)}
+                      >
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                      </button>
+                    {/if}
                     {#each QUICK_EMOJIS as emoji (emoji)}
                       <button
                         class="rounded-full p-1 text-sm transition-transform hover:scale-125"

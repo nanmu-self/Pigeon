@@ -24,6 +24,7 @@ import type {
   WsDeliveredReceipt,
   WsReactionUpdate,
   WsReadReceipt,
+  WsRecalledNotice,
 } from '@pigeon/shared-types';
 import {
   chatApi,
@@ -80,6 +81,7 @@ export class ChatStore {
     ws.on('message:read', (r) => void this.onReadReceipt(r));
     ws.on('message:delivered', (r) => void this.onDeliveredReceipt(r));
     ws.on('reaction:update', (r) => this.onReactionUpdate(r));
+    ws.on('message:recalled', (r) => void this.onRecalled(r));
     ws.on('presence:update', (p) => this.onPresence(p.userId, p.online));
   }
 
@@ -212,6 +214,7 @@ export class ChatStore {
         meta: m.meta ? JSON.stringify(m.meta) : undefined,
         replySummary: m.replyTo ? JSON.stringify(m.replyTo) : undefined,
         reactions: m.reactions?.length ? JSON.stringify(m.reactions) : undefined,
+        recalled: m.recalledAt !== undefined && m.recalledAt !== null,
       });
     }
   }
@@ -241,6 +244,33 @@ export class ChatStore {
 
   cancelReply(): void {
     this.replyTo = null;
+  }
+
+  /**
+   * 撤回消息（2 分钟窗口内、仅自己发送的）：REST 调用后本地立即应用；
+   * 对端经 message:recalled 推送同步（内容已在服务端清空）。
+   */
+  async recall(msg: ChatMessage): Promise<void> {
+    if (!this.current || !msg.serverMsgId || msg.recalled) return;
+    try {
+      await sessionsApi.recall(this.current.id, msg.serverMsgId);
+      await chatApi.applyRecalled(msg.serverMsgId);
+      this.messages = this.messages.map((m) =>
+        m.serverMsgId === msg.serverMsgId ? { ...m, recalled: true, content: '', meta: null } : m,
+      );
+      this.error = null;
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  /** WS 撤回通知：本地应用 + 当前会话 UI 刷新 */
+  private async onRecalled(r: WsRecalledNotice): Promise<void> {
+    await chatApi.applyRecalled(r.messageId);
+    if (this.current?.id !== r.conversationId) return;
+    this.messages = this.messages.map((m) =>
+      m.serverMsgId === r.messageId ? { ...m, recalled: true, content: '', meta: null } : m,
+    );
   }
 
   /** 表情回应 toggle：已点 → remove；未点 → add（本地乐观更新，失败重读本地） */
@@ -446,6 +476,7 @@ export class ChatStore {
       meta: m.meta ? JSON.stringify(m.meta) : undefined,
       replySummary: m.replyTo ? JSON.stringify(m.replyTo) : undefined,
       reactions: m.reactions?.length ? JSON.stringify(m.reactions) : undefined,
+      recalled: m.recalledAt !== undefined && m.recalledAt !== null,
     });
 
     if (this.current?.id === m.conversationId) {

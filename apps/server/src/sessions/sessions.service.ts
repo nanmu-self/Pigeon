@@ -47,6 +47,8 @@ const MAX_META_LENGTH = 4096;
 const MAX_CONTENT_LENGTH = 4000;
 /** 历史消息单页上限 */
 const MAX_HISTORY_LIMIT = 100;
+/** 撤回窗口：发送后 2 分钟内可撤回 */
+const RECALL_WINDOW_MS = 2 * 60 * 1000;
 
 /** PostgreSQL 唯一约束冲突（23505）：幂等写入路径用于吞掉重复插入 */
 function isUniqueViolation(error: unknown): boolean {
@@ -422,6 +424,48 @@ export class SessionsService {
       this.ws.toUser(String(session.userAId), 'reaction:update', payload);
       this.ws.toUser(String(session.userBId), 'reaction:update', payload);
     });
+  }
+
+  // ── 撤回 ─────────────────────────────────────────────────
+
+  /**
+   * 撤回消息（2 分钟窗口内，仅发送者本人）：
+   * 事务内清空 content/meta 并打 recalledAt 标记（行保留，排序/同步锚点不破坏），
+   * 然后向双方 user 房间广播 message:recalled。
+   */
+  async recallMessage(userId: number, messageId: number): Promise<void> {
+    const message = (await this.prisma.orm.public.Message.first({ id: messageId })) as (MessageRow & { recalledAt: string | null }) | null;
+    if (!message) throw new NotFoundException('消息不存在');
+    await this.assertMember(message.sessionId, userId);
+    if (message.senderId !== userId) {
+      throw new ForbiddenException('只能撤回自己发送的消息');
+    }
+    if (message.recalledAt) return; // 已撤回 → 幂等成功
+    if (Date.now() - pgTimestampToMs(message.createdAt) > RECALL_WINDOW_MS) {
+      throw new BadRequestException('超过 2 分钟的消息不能撤回');
+    }
+
+    const recalledAt = new Date().toISOString();
+    await this.prisma.client.transaction(async (tx) => {
+      await tx.orm.public.Message.where({ id: messageId }).update({
+        recalledAt,
+        content: '',
+        meta: null,
+      });
+    });
+
+    // 双方广播撤回通知
+    const session = await this.sessionRow(message.sessionId);
+    if (session) {
+      const payload = {
+        conversationId: String(message.sessionId),
+        messageId: String(messageId),
+        userId: String(userId),
+        recalledAt: pgTimestampToMs(recalledAt),
+      };
+      this.ws.toUser(String(session.userAId), 'message:recalled', payload);
+      this.ws.toUser(String(session.userBId), 'message:recalled', payload);
+    }
   }
 
   /**

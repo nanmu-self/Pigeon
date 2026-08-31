@@ -184,6 +184,8 @@ export interface WsChatMessage {
   replyTo?: MessageReplySummary | null;
   /** 表情回应聚合（历史下发携带；实时变化走 reaction:update） */
   reactions?: MessageReactionSummary[];
+  /** 撤回时间（Unix 毫秒；撤回消息 content 已清空，UI 渲染撤回占位） */
+  recalledAt?: number | null;
   /** Unix 毫秒时间戳 */
   createdAt: number;
 }
@@ -292,6 +294,16 @@ export interface WsDeliveredReceipt {
   deliveredAt: number;
 }
 
+/** S2C 撤回通知：content 已清空，客户端渲染撤回占位 */
+export interface WsRecalledNotice {
+  conversationId: string;
+  messageId: string;
+  /** 撤回者（= 原发送者） */
+  userId: string;
+  /** Unix 毫秒 */
+  recalledAt: number;
+}
+
 /** S2C 表情回应增量更新（add/remove） */
 export interface WsReactionUpdate {
   conversationId: string;
@@ -327,6 +339,7 @@ export interface ServerToClientEvents {
   'message:read': (payload: WsReadReceipt) => void;
   'message:delivered': (payload: WsDeliveredReceipt) => void;
   'reaction:update': (payload: WsReactionUpdate) => void;
+  'message:recalled': (payload: WsRecalledNotice) => void;
   'typing:update': (payload: WsTypingState) => void;
   'presence:update': (payload: WsPresenceState) => void;
   'friend:request': (payload: WsFriendRequest) => void;

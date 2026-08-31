@@ -80,6 +80,10 @@ model Message {
   /// 被引用消息被删时置空（SetNull）
   replyToId Int?
 
+  /// 撤回时间（NULL = 未撤回）；撤回时清空 content/meta，
+  /// 行保留（排序/同步锚点不破坏）
+  recalledAt TimestamptzString?
+
   createdAt TimestamptzString @default(now())
 
   /// 会话删除前不可删消息（默认 Restrict），聊天记录随会话生命周期保留

@@ -99,6 +99,8 @@ pub struct NewMessage {
     pub reply_summary: Option<String>,
     /// 表情回应聚合（JSON 字符串）
     pub reactions: Option<String>,
+    /// 是否已撤回（撤回占位渲染）
+    pub recalled: bool,
 }
 
 /// 聊天消息
@@ -125,6 +127,8 @@ pub struct ChatMessage {
     pub reply_summary: Option<String>,
     /// 表情回应聚合（JSON 字符串：[ { emoji, userIds } ]）
     pub reactions: Option<String>,
+    /// 是否已撤回（撤回消息 content 为空，UI 渲染撤回占位）
+    pub recalled: bool,
     /// Unix 毫秒时间戳
     pub created_at: i64,
 }
@@ -150,6 +154,9 @@ pub struct ServerMessage {
     pub reply_summary: Option<String>,
     /// 表情回应聚合（JSON 字符串）
     pub reactions: Option<String>,
+    /// 服务端已撤回
+    #[serde(default)]
+    pub recalled: bool,
 }
 
 /// 合并结果：inserted = false 表示本地已有（幂等跳过或占位行补全）

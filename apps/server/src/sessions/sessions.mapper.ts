@@ -16,6 +16,7 @@ export interface MessageRow {
   meta: unknown;
   clientMsgId: string | null;
   replyToId: number | null;
+  recalledAt: string | null;
   createdAt: string;
 }
 
@@ -58,6 +59,7 @@ export function toChatMessage(
     meta: (row.meta as Record<string, unknown> | null) ?? null,
     ...(extras?.replyTo ? { replyTo: extras.replyTo } : {}),
     ...(extras?.reactions?.length ? { reactions: extras.reactions } : {}),
+    ...(row.recalledAt ? { recalledAt: pgTimestampToMs(row.recalledAt) } : {}),
     createdAt: pgTimestampToMs(row.createdAt),
   };
 }

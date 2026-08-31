@@ -69,6 +69,15 @@ export class SessionsController {
     return this.sessions.getHistory(req.user.userId, id, cursor, limit);
   }
 
+  @Post(':id/messages/:messageId/recall')
+  recall(
+    @Req() req: AuthedRequest,
+    @Param('id', ParseIntPipe) id: number,
+    @Param('messageId', ParseIntPipe) messageId: number,
+  ): Promise<void> {
+    return this.sessions.recallMessage(req.user.userId, messageId);
+  }
+
   @Post(':id/read')
   markRead(@Req() req: AuthedRequest, @Param('id', ParseIntPipe) id: number): Promise<MessageReadAck> {
     return this.sessions.markRead(req.user.userId, id);

@@ -200,7 +200,7 @@ pub fn get_messages(
 
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, client_msg_id, created_at
+        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, recalled, client_msg_id, created_at
         FROM messages
         WHERE conversation_id = ?1
           AND (?2 IS NULL OR created_at < ?2 OR (created_at = ?2 AND id < ?3))
@@ -231,8 +231,8 @@ pub fn insert_message(
     tx.execute(
         "INSERT INTO messages
              (conversation_id, sender, sender_name, kind, content,
-              client_msg_id, meta, reply_summary, reactions, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+              client_msg_id, meta, reply_summary, reactions, recalled, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             msg.conversation_id,
             msg.sender,
@@ -243,6 +243,7 @@ pub fn insert_message(
             msg.meta,
             msg.reply_summary,
             msg.reactions,
+            msg.recalled,
             msg.status,
             now
         ],
@@ -266,6 +267,7 @@ pub fn insert_message(
         server_msg_id: None,
         reply_summary: msg.reply_summary,
         reactions: msg.reactions,
+        recalled: msg.recalled,
         client_msg_id: msg.client_msg_id,
         created_at: now,
     })
@@ -324,8 +326,8 @@ pub fn upsert_server_message(
     tx.execute(
         "INSERT INTO messages
              (conversation_id, sender, sender_name, kind, content,
-              client_msg_id, server_msg_id, meta, reply_summary, reactions, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              client_msg_id, server_msg_id, meta, reply_summary, reactions, recalled, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             m.conversation_id,
             m.sender,
@@ -337,6 +339,7 @@ pub fn upsert_server_message(
             m.meta,
             m.reply_summary,
             m.reactions,
+            m.recalled,
             status,
             m.created_at
         ],
@@ -362,6 +365,7 @@ pub fn upsert_server_message(
             server_msg_id: Some(m.server_msg_id.clone()),
             reply_summary: m.reply_summary.clone(),
             reactions: m.reactions.clone(),
+            recalled: m.recalled,
             client_msg_id: m.client_msg_id.clone(),
             created_at: m.created_at,
         },
@@ -413,6 +417,18 @@ pub fn retry_message(conn: &Connection, client_msg_id: &str) -> Result<(), rusql
         params![client_msg_id],
     )?;
     Ok(())
+}
+
+/// 本地应用撤回：清空内容/meta、打撤回标记（按服务端消息 id 幂等）。
+/// 返回是否实际更新了行（用于 UI 判断是否需要刷新）。
+pub fn apply_recalled(conn: &Connection, server_msg_id: &str) -> Result<bool, rusqlite::Error> {
+    let updated = conn.execute(
+        "UPDATE messages
+         SET recalled = 1, content = '', meta = NULL, reactions = NULL
+         WHERE server_msg_id = ?1 AND recalled = 0",
+        params![server_msg_id],
+    )?;
+    Ok(updated > 0)
 }
 
 /// 推进对端已读/送达水位（只前进不后退），并把本地己方消息的
@@ -487,7 +503,7 @@ fn fetch_by_server_msg_id(
     server_msg_id: &str,
 ) -> Result<Option<ChatMessage>, rusqlite::Error> {
     let mut stmt = conn.prepare(
-        "SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, client_msg_id, created_at
+        "SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, recalled, client_msg_id, created_at
          FROM messages WHERE server_msg_id = ?1",
     )?;
     let mut rows = stmt.query_map(params![server_msg_id], map_message)?;
@@ -509,7 +525,7 @@ pub fn search_messages(
 
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, client_msg_id, created_at
+        SELECT id, conversation_id, sender, sender_name, kind, content, status, meta, server_msg_id, reply_summary, reactions, recalled, client_msg_id, created_at
         FROM messages
         WHERE conversation_id = ?1 AND content LIKE '%' || ?2 || '%'
         ORDER BY created_at DESC, id DESC
@@ -536,8 +552,9 @@ fn map_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatMessage> {
         server_msg_id: row.get(8)?,
         reply_summary: row.get(9)?,
         reactions: row.get(10)?,
-        client_msg_id: row.get(11)?,
-        created_at: row.get(12)?,
+        recalled: row.get::<_, i64>(11)? != 0,
+        client_msg_id: row.get(12)?,
+        created_at: row.get(13)?,
     })
 }
 
@@ -566,6 +583,7 @@ mod tests {
             meta: None,
             reply_summary: None,
             reactions: None,
+            recalled: false,
             status: STATUS_SENT.to_string(),
         }
     }
@@ -647,6 +665,7 @@ mod tests {
             meta: None,
             reply_summary: None,
             reactions: None,
+            recalled: false,
         };
 
         // 先拉到新页（id 101/102，时间较晚），再回填更早的一页（id 99/100）
@@ -670,6 +689,7 @@ mod tests {
             meta: Some(r#"{"fname":"a.png","size":2048}"#.to_string()),
             reply_summary: None,
             reactions: None,
+            recalled: false,
         };
         let r3 = upsert_server_message(&conn, &with_meta).unwrap();
         assert!(r3.inserted);
@@ -707,6 +727,7 @@ mod tests {
             meta: None,
             reply_summary: None,
             reactions: None,
+            recalled: false,
         };
 
         // 合并三条自己发的消息：尚未任何回执 → 全部 sent
@@ -762,6 +783,7 @@ mod tests {
                 meta: None,
                 reply_summary: None,
                 reactions: None,
+                recalled: false,
                 status: STATUS_SENDING.to_string(),
             },
         )
@@ -782,6 +804,7 @@ mod tests {
                 meta: None,
                 reply_summary: None,
                 reactions: None,
+                recalled: false,
             },
         )
         .unwrap();
@@ -798,6 +821,43 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn apply_recalled_clears_content_and_is_idempotent() {
+        let conn = mem_db();
+        let conv = ensure_conversation(&conn, "sess-5", "6", "Bob").unwrap();
+
+        // 合并一条已同步的消息
+        upsert_server_message(
+            &conn,
+            &ServerMessage {
+                conversation_id: conv.id,
+                server_msg_id: "9".to_string(),
+                sender: SENDER_OTHER.to_string(),
+                sender_name: "Bob".to_string(),
+                kind: MSG_TEXT.to_string(),
+                content: "将被撤回".to_string(),
+                created_at: 1000,
+                client_msg_id: None,
+                meta: None,
+                reply_summary: None,
+                reactions: None,
+                recalled: false,
+            },
+        )
+        .unwrap();
+
+        // 本地应用撤回：内容/meta/reactions 清空 + 标记
+        let changed = apply_recalled(&conn, "9").unwrap();
+        assert!(changed);
+        let row = get_messages(&conn, conv.id, None, None, None).unwrap().remove(0);
+        assert!(row.recalled);
+        assert_eq!(row.content, "");
+        assert!(row.meta.is_none());
+
+        // 幂等：再次应用不再变更
+        assert!(!apply_recalled(&conn, "9").unwrap());
     }
 
     #[test]
@@ -821,6 +881,7 @@ mod tests {
                     meta: None,
                     reply_summary: None,
                     reactions: None,
+                    recalled: false,
                 },
             )
             .unwrap();
@@ -843,6 +904,7 @@ mod tests {
                 meta: None,
                 reply_summary: None,
                 reactions: None,
+                recalled: false,
             },
         )
         .unwrap();

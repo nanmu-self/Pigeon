@@ -38,6 +38,7 @@ describe('toChatMessage', () => {
       meta: null,
       clientMsgId: null,
       replyToId: null,
+      recalledAt: null,
       createdAt: '2026-08-31 16:13:26.170714+00',
     };
     const msg = toChatMessage(row, 'Alice');
@@ -63,6 +64,7 @@ describe('toChatMessage', () => {
       meta: null,
       clientMsgId: null,
       replyToId: null,
+      recalledAt: null,
       createdAt: '2026-08-31 16:13:26+00',
     };
     const msg = toChatMessage(row, '');

@@ -29,6 +29,10 @@ export const sessionsApi = {
 
   /** 标记会话已读（服务端同时把已读回执推给对端） */
   markRead: (sessionId: string) => http.Post<MessageReadAck>(`/sessions/${sessionId}/read`),
+
+  /** 撤回消息（2 分钟窗口内、仅发送者；服务端广播撤回通知给双方） */
+  recall: (sessionId: string, messageId: string) =>
+    http.Post<null>(`/sessions/${sessionId}/messages/${messageId}/recall`),
 };
 
 export type { SessionSummary, MessageHistoryPage, MessageReadAck, WsChatMessage };

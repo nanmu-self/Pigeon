@@ -34,6 +34,7 @@ pub fn run() {
             commands::acknowledge_message,
             commands::mark_message_failed,
             commands::retry_message,
+            commands::apply_recalled,
             commands::set_peer_watermarks,
         ])
         .run(tauri::generate_context!())

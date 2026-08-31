@@ -520,4 +520,72 @@ describe('聊天链路 (e2e)', () => {
     await socketAlice.disconnect();
     await socketBob.disconnect();
   });
+
+  it('消息撤回：2 分钟窗口内仅发送者可撤回，双端同步清空内容', async () => {
+    const sessionId = (globalThis as { __e2eSessionId?: string }).__e2eSessionId;
+    const socketAlice = await connectWs(alice.token);
+    const socketBob = await connectWs(bob.token);
+
+    // alice 发两条消息
+    const sent1 = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+      conversationId: sessionId,
+      content: '会撤回的话',
+      clientMsgId: 'e2e-recall-1',
+    });
+    expect(sent1.ok).toBe(true);
+    const sent2 = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+      conversationId: sessionId,
+      content: '不会撤回的话',
+      clientMsgId: 'e2e-recall-2',
+    });
+    expect(sent2.ok).toBe(true);
+    const msg1 = sent1.data as WsChatMessage;
+
+    // bob 收到 alice 的撤回通知
+    const notice = waitFor<{ messageId: string; userId: string }>(socketBob, 'message:recalled');
+    const recalled = await api
+      .post(`/sessions/${sessionId}/messages/${msg1.id}/recall`)
+      .auth(alice.token, { type: 'bearer' });
+    expect(recalled.status).toBe(201);
+    expect((await notice).messageId).toBe(msg1.id);
+
+    // 历史回读：content 已清空 + recalledAt 标记
+    const page = await api
+      .get(`/sessions/${sessionId}/messages?limit=50`)
+      .auth(bob.token, { type: 'bearer' });
+    const recalledRow = (page.body as MessageHistoryPage).messages.find((m) => m.id === msg1.id);
+    expect(recalledRow?.recalledAt).toBeGreaterThan(0);
+    expect(recalledRow?.content).toBe('');
+
+    // bob 不能撤回 alice 的消息（403）
+    const notMine = await api
+      .post(`/sessions/${sessionId}/messages/${sent2.data?.id}/recall`)
+      .auth(bob.token, { type: 'bearer' });
+    expect(notMine.status).toBe(403);
+
+    // 超窗：直接改库把 created_at 拨到 10 分钟前 → 撤回被拒（400）
+    const oldMsg = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+      conversationId: sessionId,
+      content: '超窗消息',
+      clientMsgId: 'e2e-recall-3',
+    });
+    expect(oldMsg.ok).toBe(true);
+    const oldId = Number((oldMsg.data as WsChatMessage).id);
+    await prisma.orm.public.Message
+      .where({ id: oldId })
+      .update({ createdAt: new Date(Date.now() - 10 * 60 * 1000).toISOString() });
+    const tooLate = await api
+      .post(`/sessions/${sessionId}/messages/${oldId}/recall`)
+      .auth(alice.token, { type: 'bearer' });
+    expect(tooLate.status).toBe(400);
+
+    // 幂等：重复撤回同一消息 → 仍成功
+    const again = await api
+      .post(`/sessions/${sessionId}/messages/${msg1.id}/recall`)
+      .auth(alice.token, { type: 'bearer' });
+    expect(again.status).toBe(201);
+
+    await socketAlice.disconnect();
+    await socketBob.disconnect();
+  });
 });
