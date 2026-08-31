@@ -1,0 +1,151 @@
+//! 聊天记录相关 Tauri commands — 薄封装：参数校验 + 错误转换，
+//! SQL 逻辑在 `chat.rs`（可单测）。
+
+use tauri::State;
+
+use crate::chat;
+use crate::db::Db;
+use crate::models::*;
+
+fn lock<'a>(state: &'a State<Db>) -> Result<std::sync::MutexGuard<'a, rusqlite::Connection>, String> {
+    state.0.lock().map_err(|e| format!("数据库锁获取失败: {e}"))
+}
+
+// ── 会话 ─────────────────────────────────────────────────────
+
+/// 会话列表（含最新消息预览与未读数）
+#[tauri::command]
+pub fn list_conversations(state: State<Db>) -> Result<Vec<ConversationSummary>, String> {
+    let conn = lock(&state)?;
+    chat::list_conversations(&conn).map_err(|e| e.to_string())
+}
+
+/// 新建会话（direct / group）
+#[tauri::command]
+pub fn create_conversation(
+    state: State<Db>,
+    name: String,
+    kind: Option<String>,
+) -> Result<Conversation, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("会话名称不能为空".into());
+    }
+    let kind = kind.as_deref().unwrap_or(KIND_DIRECT);
+    if kind != KIND_DIRECT && kind != KIND_GROUP {
+        return Err(format!("非法会话类型: {kind}"));
+    }
+    let conn = lock(&state)?;
+    chat::create_conversation(&conn, name, kind).map_err(|e| e.to_string())
+}
+
+/// 标记会话已读
+#[tauri::command]
+pub fn mark_conversation_read(state: State<Db>, conversation_id: i64) -> Result<(), String> {
+    let conn = lock(&state)?;
+    chat::mark_conversation_read(&conn, conversation_id).map_err(|e| e.to_string())
+}
+
+/// 删除会话（聊天记录随 CASCADE 一并删除）
+#[tauri::command]
+pub fn delete_conversation(state: State<Db>, conversation_id: i64) -> Result<(), String> {
+    let conn = lock(&state)?;
+    chat::delete_conversation(&conn, conversation_id).map_err(|e| e.to_string())
+}
+
+/// 清空会话聊天记录（保留会话本身）
+#[tauri::command]
+pub fn clear_history(state: State<Db>, conversation_id: i64) -> Result<(), String> {
+    let conn = lock(&state)?;
+    chat::clear_history(&conn, conversation_id).map_err(|e| e.to_string())
+}
+
+// ── 消息 ─────────────────────────────────────────────────────
+
+/// 拉取消息（keyset 分页，时间正序；传 beforeId 上滑加载更早历史）
+#[tauri::command]
+pub fn get_messages(
+    state: State<Db>,
+    conversation_id: i64,
+    limit: Option<i64>,
+    before_id: Option<i64>,
+) -> Result<Vec<ChatMessage>, String> {
+    let conn = lock(&state)?;
+    chat::get_messages(&conn, conversation_id, limit, before_id).map_err(|e| e.to_string())
+}
+
+/// 通用写入消息（接收方 / 同步路径复用；前端发送走 send_message）
+#[tauri::command]
+pub fn insert_message(
+    state: State<Db>,
+    conversation_id: i64,
+    content: String,
+    sender: Option<String>,
+    sender_name: Option<String>,
+    kind: Option<String>,
+    client_msg_id: Option<String>,
+    status: Option<String>,
+) -> Result<ChatMessage, String> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err("消息内容不能为空".into());
+    }
+
+    let msg = NewMessage {
+        conversation_id,
+        sender: sender.unwrap_or_else(|| SENDER_SELF.to_string()),
+        sender_name: sender_name.unwrap_or_default(),
+        kind: kind.unwrap_or_else(|| MSG_TEXT.to_string()),
+        content: content.to_string(),
+        client_msg_id,
+        status: status.unwrap_or_else(|| STATUS_SENT.to_string()),
+    };
+
+    let conn = lock(&state)?;
+    chat::insert_message(&conn, msg).map_err(|e| e.to_string())
+}
+
+/// 当前用户发送文本消息
+#[tauri::command]
+pub fn send_message(
+    state: State<Db>,
+    conversation_id: i64,
+    content: String,
+) -> Result<ChatMessage, String> {
+    let content = content.trim();
+    if content.is_empty() {
+        return Err("消息内容不能为空".into());
+    }
+
+    let msg = NewMessage {
+        conversation_id,
+        sender: SENDER_SELF.to_string(),
+        sender_name: String::new(),
+        kind: MSG_TEXT.to_string(),
+        content: content.to_string(),
+        client_msg_id: None,
+        status: STATUS_SENT.to_string(),
+    };
+
+    let conn = lock(&state)?;
+    chat::insert_message(&conn, msg).map_err(|e| e.to_string())
+}
+
+/// 删除单条消息
+#[tauri::command]
+pub fn delete_message(state: State<Db>, message_id: i64) -> Result<(), String> {
+    let conn = lock(&state)?;
+    chat::delete_message(&conn, message_id).map_err(|e| e.to_string())
+}
+
+/// 会话内关键词搜索
+#[tauri::command]
+pub fn search_messages(
+    state: State<Db>,
+    conversation_id: i64,
+    query: String,
+    limit: Option<i64>,
+) -> Result<Vec<ChatMessage>, String> {
+    let conn = lock(&state)?;
+    chat::search_messages(&conn, conversation_id, &query, limit).map_err(|e| e.to_string())
+}
