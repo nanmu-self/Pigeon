@@ -18,7 +18,7 @@ COPY packages packages
 RUN pnpm --filter @pigeon/server build
 
 # ── 运行阶段 ─────────────────────────────────────────────
-FROM node:22-alpine
+FROM node:22-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 RUN npm i -g pnpm@11
