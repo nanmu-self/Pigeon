@@ -2,7 +2,7 @@
 # 多阶段：build（全量依赖+源码，同时作为迁移任务容器）/ runtime（仅生产依赖+dist）
 
 # ── 构建阶段 ─────────────────────────────────────────────
-FROM node:22-alpine AS build
+FROM node:22-slim AS build
 WORKDIR /app
 RUN npm i -g pnpm@11
 
@@ -19,7 +19,7 @@ COPY packages packages
 RUN pnpm --filter @pigeon/server build
 
 # ── 运行阶段 ─────────────────────────────────────────────
-FROM node:22-alpine AS runtime
+FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 RUN npm i -g pnpm@11
