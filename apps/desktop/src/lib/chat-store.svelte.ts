@@ -85,6 +85,27 @@ export class ChatStore {
     return ws.userId;
   }
 
+  /** 登出时清空全部内存态（本地 SQLite 历史保留，同账号重登后仍可读） */
+  reset(): void {
+    this.sessions = [];
+    this.sessionsLoading = false;
+    this.friends = [];
+    this.current = null;
+    this.localConversation = null;
+    this.messages = [];
+    this.hasMoreHistory = false;
+    this.loadingOlder = false;
+    this.syncing = false;
+    this.error = null;
+    this.uploadProgress = null;
+    this.replyTo = null;
+    this.groupDetail = null;
+    this.groupDetailLoading = false;
+    this.pendingMentions = [];
+    this.liveMentionedIds = [];
+    this.oldestFetchedServerId = null;
+  }
+
   /** 最近一次服务端拉取页的最早一条消息 id（上滑加载的游标） */
   private oldestFetchedServerId: string | null = null;
 

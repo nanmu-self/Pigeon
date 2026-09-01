@@ -1,16 +1,22 @@
 <script lang="ts">
   /**
-   * 设置页 — 个人资料（头像 + 昵称）。
+   * 设置页 — 个人资料（头像 + 昵称）+ 账户（退出登录）。
    *
    * 头像链路：选图（前端预校验类型/大小）→ uploadToQiniu(dir 'avatar') 直传七牛
    * → PATCH /users/me 把返回的 publicUrl 写入资料 → 全局 profile 同步（侧边栏即时生效）。
+   *
+   * 退出登录：断开 WS → 清凭据（tokenStore）→ 清全局状态（profile / chat 内存态）
+   * → 跳回登录页；本地 SQLite 历史保留，重登后可继续查看。
    */
   import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
   import { showToast } from "$lib/toast";
   import { cn } from "$lib/utils";
-  import { ApiError } from "$lib/api/http";
+  import { ApiError, tokenStore } from "$lib/api/http";
   import { usersApi } from "$lib/api/users";
   import { profile } from "$lib/api/profile.svelte";
+  import { ws } from "$lib/api/socket.svelte";
+  import { chat } from "$lib/chat-store.svelte";
   import {
     isUploadCanceled,
     uploadToQiniu,
@@ -109,6 +115,44 @@
       });
     } finally {
       savingNickname = false;
+    }
+  }
+
+  // ── 退出登录 ─────────────────────────────────────────────
+  let loggingOut = $state(false);
+  let confirmLogout = $state(false);
+  let confirmTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 两步确认：首次点击只进入「确认退出？」状态，3 秒内再点才真正退出 */
+  function requestLogout() {
+    if (loggingOut) return;
+    if (!confirmLogout) {
+      confirmLogout = true;
+      if (confirmTimer) clearTimeout(confirmTimer);
+      confirmTimer = setTimeout(() => (confirmLogout = false), 3_000);
+      return;
+    }
+    if (confirmTimer) {
+      clearTimeout(confirmTimer);
+      confirmTimer = null;
+    }
+    void doLogout();
+  }
+
+  async function doLogout() {
+    if (loggingOut) return;
+    loggingOut = true;
+    try {
+      avatarHandle?.cancel(); // 中止进行中的头像上传（如有）
+      ws.disconnect(); // 主动断开 WS（handler 注册表保留，重登后 connect 自动重绑）
+      tokenStore.clear(); // 清除登录凭据（localStorage + sessionStorage）
+      profile.set(null); // 清空全局用户资料
+      chat.reset(); // 清空聊天内存态（本地 SQLite 历史保留）
+      showToast("已退出登录", { type: "success" });
+      await goto("/", { replaceState: true });
+    } finally {
+      loggingOut = false;
+      confirmLogout = false;
     }
   }
 </script>
@@ -255,6 +299,33 @@
           </p>
         {/if}
       </section>
+
+      {#if profile.user !== null}
+        <!-- ── 账户 ── -->
+        <section
+          class="mt-4 rounded-xl border border-[var(--p-border)] bg-[var(--p-card)] p-6"
+        >
+          <h2 class="text-sm font-semibold text-[var(--p-fg)]">账户</h2>
+          <div class="mt-4 flex items-center justify-between gap-4">
+            <p class="min-w-0 text-xs leading-relaxed text-[var(--p-muted-fg)]">
+              退出后清除本机登录凭据并断开与服务端的连接；本地聊天记录保留，重新登录后可继续查看。
+            </p>
+            <button
+              type="button"
+              onclick={requestLogout}
+              disabled={loggingOut}
+              class={cn(
+                "h-9 shrink-0 rounded-md px-4 text-sm font-medium transition-fast",
+                confirmLogout || loggingOut
+                  ? "bg-red-500 text-white hover:opacity-90"
+                  : "border border-red-500/40 text-red-500 hover:bg-red-500/10",
+              )}
+            >
+              {loggingOut ? "退出中…" : confirmLogout ? "确认退出？" : "退出登录"}
+            </button>
+          </div>
+        </section>
+      {/if}
 
       <input
         bind:this={avatarInput}
