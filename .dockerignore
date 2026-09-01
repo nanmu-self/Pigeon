@@ -1,0 +1,11 @@
+# 构建上下文是仓库根目录，把无关/大目录挡在外面
+.git
+.github
+**/node_modules
+apps/desktop
+apps/desktop/src-tauri
+apps/server/dist
+apps/server/.env
+crates
+deploy
+*.md

@@ -2,8 +2,27 @@
  * 本地聊天记录 API — 封装对 Tauri Rust 侧 SQLite commands 的调用。
  * 类型与 src-tauri/src/models.rs 保持一致（serde camelCase）。
  */
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { MessageReactionSummary } from '@pigeon/shared-types';
+
+/**
+ * 本地库调用统一入口：把「旧 Rust 后端 + 新前端」的结构不匹配错误
+ * （迁移嵌在二进制里，旧二进制不会执行新迁移）翻译成可操作的提示，
+ * 而不是让 `no such column: xxx` 这种 SQLite 原文直接冒到 UI。
+ */
+async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await tauriInvoke<T>(cmd, args);
+  } catch (e) {
+    const text = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+    if (/no such (column|table)/i.test(text)) {
+      throw new Error(
+        `本地数据库结构过旧（${text}）。请完全退出并重启应用，启动时会自动完成本地库迁移；若重启后仍复现，请更新/重新安装应用。`,
+      );
+    }
+    throw e;
+  }
+}
 
 export type ConversationKind = "direct" | "group";
 export type MessageSender = "self" | "other" | "system";

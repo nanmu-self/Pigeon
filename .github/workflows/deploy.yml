@@ -1,0 +1,52 @@
+name: Deploy (server → VPS)
+
+# 推 main 且服务端相关文件变更时部署；也可在 Actions 页面手动触发。
+# 部署动作 = SSH 到 VPS：拉代码 → 迁移容器跑 db:update → 构建/更新 server 容器 → 健康检查
+# 前置条件见 deploy/README.md（compose 文件、/opt/pigeon/shared/env、1panel-network、GitHub Secrets）
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/server/**'
+      - 'packages/shared-types/**'
+      - 'pnpm-lock.yaml'
+      - 'deploy/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false # 部署不可并行，排队执行
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: SSH 部署（拉取 → 迁移 → 构建/更新容器 → 健康检查）
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.PIGEON_SSH_HOST }}
+          username: ${{ secrets.PIGEON_SSH_USER }}
+          key: ${{ secrets.PIGEON_SSH_KEY }}
+          script_stop: true # 任一步骤失败立即中断
+          script: |
+            cd /opt/pigeon/repo
+            git fetch --force origin main
+            git checkout --force ${{ github.sha }}
+
+            echo "── 数据库迁移（一次性容器）──"
+            docker compose -f deploy/docker-compose.yml --profile tools run --rm migrate
+
+            echo "── 构建/更新服务容器 ──"
+            docker compose -f deploy/docker-compose.yml up -d --build server
+
+            echo "── 健康检查 ──"
+            for i in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:3048/health > /dev/null 2>&1; then
+                echo "部署成功：$(curl -fsS http://127.0.0.1:3048/health)"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "健康检查失败（60s 内 /health 未就绪），查看日志：docker logs pigeon-server"
+            exit 1
