@@ -11,7 +11,8 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/desktop/package.json apps/desktop/
 COPY apps/server/package.json apps/server/
 COPY packages/shared-types/package.json packages/shared-types/
-RUN pnpm install --frozen-lockfile
+# 只装后端（含其 workspace 依赖）的依赖：桌面端几百个包与本镜像无关
+RUN pnpm install --frozen-lockfile --filter @pigeon/server...
 
 COPY apps/server apps/server
 COPY packages packages
@@ -28,7 +29,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY apps/desktop/package.json apps/desktop/
 COPY apps/server/package.json apps/server/
 COPY packages/shared-types/package.json packages/shared-types/
-RUN pnpm install --frozen-lockfile --prod
+RUN pnpm install --frozen-lockfile --prod --filter @pigeon/server...
 
 COPY --from=build /app/apps/server/dist apps/server/dist
 
