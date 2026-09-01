@@ -119,6 +119,12 @@ export class ChatStore {
     ws.on('message:recalled', (r) => void this.onRecalled(r));
     ws.on('group:updated', (r) => void this.onGroupUpdated(r));
     ws.on('presence:update', (p) => this.onPresence(p.userId, p.online));
+    // 断线重连（含服务端重启）期间错过的推送无法回放：对账刷新
+    // 会话列表（含各对端在线状态）与当前会话的最新消息
+    ws.onConnected(() => {
+      if (this.sessions.length > 0) void this.loadSessions();
+      if (this.current && this.localConversation) void this.syncLatest();
+    });
   }
 
   /** 表情回应增量更新：直接改本地行的 reactions JSON */
@@ -619,9 +625,17 @@ export class ChatStore {
   }
 
   private onPresence(userId: string, online: boolean): void {
+    const id = Number(userId);
+    if (!Number.isInteger(id)) return; // 游客（guest:xxxx）等非数字 id 直接忽略
     this.sessions = this.sessions.map((s) =>
-      s.peer?.id === Number(userId) ? { ...s, peerOnline: online } : s,
+      s.peer?.id === id ? { ...s, peerOnline: online } : s,
     );
+    // current 是打开会话时的快照，不同步的话聊天头部的在线状态会停留旧值
+    if (this.current?.peer?.id === id) {
+      this.current = { ...this.current, peerOnline: online };
+    }
+    // 「新聊天」好友选择器里的在线状态
+    this.friends = this.friends.map((f) => (f.user.id === id ? { ...f, online } : f));
   }
 
   // ── 内部 ─────────────────────────────────────────────────

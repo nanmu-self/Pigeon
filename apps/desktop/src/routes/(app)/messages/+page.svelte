@@ -14,6 +14,24 @@
   import { groupsApi } from "$lib/api/groups";
   import { uploadToQiniu, isUploadCanceled } from "$lib/upload/qiniu";
 
+  // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
+  import Clock from "@lucide/svelte/icons/clock";
+  import Check from "@lucide/svelte/icons/check";
+  import CheckCheck from "@lucide/svelte/icons/check-check";
+  import Plus from "@lucide/svelte/icons/plus";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import Settings from "@lucide/svelte/icons/settings";
+  import Megaphone from "@lucide/svelte/icons/megaphone";
+  import FileIcon from "@lucide/svelte/icons/file";
+  import Copy from "@lucide/svelte/icons/copy";
+  import Reply from "@lucide/svelte/icons/reply";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
+  import X from "@lucide/svelte/icons/x";
+  import ImageIcon from "@lucide/svelte/icons/image";
+  import Paperclip from "@lucide/svelte/icons/paperclip";
+  import Send from "@lucide/svelte/icons/send";
+  import MessageSquare from "@lucide/svelte/icons/message-square";
+
   let draft = $state("");
   let chatEl: HTMLDivElement | undefined = $state();
   let searchQuery = $state("");
@@ -210,13 +228,13 @@
 {#snippet statusTicks(msg: ChatMessage)}
   {#if msg.sender === "self"}
     {#if msg.status === "sending"}
-      <svg class="h-3.5 w-3.5 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      <Clock size={14} class="opacity-70" />
     {:else if msg.status === "sent"}
-      <svg class="h-3.5 w-3.5 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      <Check size={14} class="opacity-70" />
     {:else if msg.status === "delivered"}
-      <svg class="h-3.5 w-3.5 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12l5 5L17 7"/><path d="m13 17 1.5 1.5L23 10"/></svg>
+      <CheckCheck size={14} class="opacity-70" />
     {:else if msg.status === "read"}
-      <svg class="h-3.5 w-3.5 text-sky-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12l5 5L17 7"/><path d="m13 17 1.5 1.5L23 10"/></svg>
+      <CheckCheck size={14} class="text-sky-300" />
     {:else if msg.status === "failed"}
       <button
         class="text-red-300 hover:text-red-200"
@@ -241,14 +259,14 @@
             if (pickerOpen) void chat.loadFriends();
           }}
         >
-          <svg class="h-4 w-4 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+          <Plus size={16} class="text-[var(--p-muted-fg)]" />
         </button>
         <button
           class="rounded-full p-2 transition-colors hover:bg-[var(--p-muted)]"
           title="刷新"
           onclick={() => void chat.loadSessions()}
         >
-          <svg class="h-4 w-4 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+          <RefreshCw size={16} class="text-[var(--p-muted-fg)]" />
         </button>
       </div>
     </div>
@@ -411,7 +429,7 @@
               }
             }}
           >
-            <svg class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <Settings size={18} />
           </button>
         {/if}
       </div>
@@ -419,7 +437,7 @@
       <!-- 群公告横幅 -->
       {#if isGroup && chat.groupDetail?.announcement}
         <div class="flex items-center gap-2 border-b border-[var(--p-border)] bg-amber-50/80 px-4 py-1.5 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
-          <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>
+          <Megaphone size={14} class="shrink-0" />
           <span class="truncate">{chat.groupDetail.announcement}</span>
         </div>
       {/if}
@@ -487,7 +505,7 @@
                     title={msg.content}
                   >
                     <div class="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--p-primary-muted)]">
-                      <svg class="h-4.5 w-4.5 text-[var(--p-primary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+                      <FileIcon size={18} class="text-[var(--p-primary)]" />
                     </div>
                     <div class="min-w-0">
                       <p class="max-w-[220px] truncate text-sm font-medium text-[var(--p-fg)]">{meta.fname ?? '文件'}</p>
@@ -498,7 +516,7 @@
                       title="复制链接"
                       onclick={() => void copyUrl(msg)}
                     >
-                      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                      <Copy size={16} />
                     </button>
                   </div>
                 {:else}
@@ -540,7 +558,7 @@
                       title="引用回复"
                       onclick={() => startReply(msg)}
                     >
-                      <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+                      <Reply size={14} />
                     </button>
                     {#if isGroup}
                       <button
@@ -562,7 +580,7 @@
                         title="撤回（2 分钟内）"
                         onclick={() => void chat.recall(msg)}
                       >
-                        <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        <Trash2 size={14} />
                       </button>
                     {/if}
                   </div>
@@ -577,11 +595,11 @@
       <div class="border-t border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3">
         {#if chat.replyTo}
           <div class="mb-2 flex items-center gap-2 rounded-lg border-l-2 border-[var(--p-primary)] bg-[var(--p-muted)]/40 px-3 py-1.5">
-            <svg class="h-3.5 w-3.5 shrink-0 text-[var(--p-primary)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/></svg>
+            <Reply size={14} class="shrink-0 text-[var(--p-primary)]" />
             <span class="min-w-0 flex-1 truncate text-xs text-[var(--p-muted-fg)]">
               回复 <span class="font-medium">{chat.replyTo.senderName || '我'}</span>：{previewText(chat.replyTo)}
             </span>
-            <button class="text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]" onclick={() => chat.cancelReply()}>×</button>
+            <button class="text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]" aria-label="取消回复" onclick={() => chat.cancelReply()}><X size={14} /></button>
           </div>
         {/if}
         {#if chat.pendingMentions.length > 0}
@@ -598,7 +616,7 @@
             disabled={!!chat.uploadProgress}
             onclick={() => imageInput?.click()}
           >
-            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>
+            <ImageIcon size={18} />
           </button>
           <button
             class="flex h-[38px] w-[38px] items-center justify-center rounded-lg text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)]"
@@ -606,7 +624,7 @@
             disabled={!!chat.uploadProgress}
             onclick={() => fileInput?.click()}
           >
-            <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <Paperclip size={18} />
           </button>
           <textarea
             bind:value={draft}
@@ -621,7 +639,7 @@
             disabled={!draft.trim() || !!chat.uploadProgress}
             class="flex h-[38px] items-center gap-1.5 rounded-lg bg-[var(--p-primary)] px-4 text-sm font-medium text-[var(--p-primary-fg)] transition-opacity disabled:opacity-50"
           >
-            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+            <Send size={16} />
             发送
           </button>
         </div>
@@ -639,7 +657,7 @@
         >
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-lg font-semibold text-[var(--p-fg)]">群设置</h2>
-            <button class="text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]" onclick={() => (groupSettingsOpen = false)}>×</button>
+            <button class="text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]" aria-label="关闭" onclick={() => (groupSettingsOpen = false)}><X size={16} /></button>
           </div>
 
           <!-- 群名 + 头像 -->
@@ -771,9 +789,7 @@
     <div class="flex flex-1 items-center justify-center bg-[var(--p-muted)]/30">
       <div class="text-center">
         <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--p-muted)]">
-          <svg class="h-8 w-8 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-          </svg>
+          <MessageSquare size={32} strokeWidth={1.5} class="text-[var(--p-muted-fg)]" />
         </div>
         <p class="text-[var(--p-muted-fg)]">
           {chat.sessions.length === 0 ? "左侧会话为空：点右上角「+」单聊或建群" : "选择一个对话开始聊天"}

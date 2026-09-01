@@ -10,6 +10,7 @@
     FriendItem,
     FriendRequestItem,
     PublicUser,
+    WsPresenceState,
   } from "@pigeon/shared-types";
 
   // ── 数据 ─────────────────────────────────────────────────
@@ -58,17 +59,34 @@
 
   onMount(() => {
     void refresh();
-    // WS 实时：收到申请 / 申请被通过 / 上下线 —— 保持列表鲜活
+    // WS 实时：收到申请 / 申请被通过 —— 保持列表鲜活
     const onFriendRequest = () => {
       showToast("收到新的好友申请", { type: "info" });
       void refresh();
     };
     const onFriendAccepted = () => void refresh();
-    const onPresence = () => void refresh();
+    // presence 事件只 patch 命中的好友（含右栏资料卡的 selected 快照），
+    // 非好友（如游客噪音、陌生人）直接忽略，避免全量刷新风暴
+    const onPresence = (p: WsPresenceState) => {
+      const userId = Number(p.userId);
+      if (!Number.isInteger(userId)) return;
+      let hit = false;
+      friends = friends.map((f) => {
+        if (f.user.id !== userId) return f;
+        hit = true;
+        return { ...f, online: p.online };
+      });
+      if (hit && selected?.user.id === userId) {
+        selected = { ...selected, online: p.online };
+      }
+    };
+    // 断线重连（含服务端重启）期间错过的上下线推送无法回放，重连即对账刷新
+    const offConnected = ws.onConnected(() => void refresh());
     ws.on("friend:request", onFriendRequest);
     ws.on("friend:accepted", onFriendAccepted);
     ws.on("presence:update", onPresence);
     return () => {
+      offConnected();
       ws.off("friend:request", onFriendRequest);
       ws.off("friend:accepted", onFriendAccepted);
       ws.off("presence:update", onPresence);

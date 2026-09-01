@@ -50,6 +50,8 @@ class SocketManager {
   private socket: WsSocket | null = null;
   private intentionalClose = false;
   private latencyTimer: ReturnType<typeof setInterval> | null = null;
+  /** 连接建立回调（每次 connect 触发，含首次与重连）：断线期间错过的推送无法回放，由订阅方对账刷新 */
+  private connectedListeners = new Set<() => void>();
   /**
    * 业务 handler 注册表：disconnect() 会 removeAllListeners，
    * 重建连接后从这里重新绑定（保证跨重连/重登的生命周期）。
@@ -87,6 +89,9 @@ class SocketManager {
       this.socketId = socket.id ?? null;
       this.lastError = null;
       this.startLatencyProbe();
+      // 重连成功 ≠ 状态如旧：服务端重启/断网期间的 presence、消息推送都丢过，
+      // 这里通知订阅方做对账刷新（见 ws.onConnected）
+      for (const cb of this.connectedListeners) cb();
     });
 
     socket.on('connection:welcome', (payload) => {
@@ -144,6 +149,16 @@ class SocketManager {
       { event, handler },
     ];
     this.typed()?.on(event, handler);
+  }
+
+  /**
+   * 注册「连接建立」回调（含首次连接与每次重连），返回取消注册函数。
+   * 用途：断线/服务端重启期间错过的推送（presence、消息）无法回放，
+   * 订阅方在此对账刷新本地状态。
+   */
+  onConnected(cb: () => void): () => void {
+    this.connectedListeners.add(cb);
+    return () => this.connectedListeners.delete(cb);
   }
 
   off<K extends keyof ServerToClientEvents>(

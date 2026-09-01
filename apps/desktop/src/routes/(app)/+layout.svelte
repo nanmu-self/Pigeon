@@ -7,6 +7,17 @@
   import { serverApi } from "$lib/api/http";
   import { profile } from "$lib/api/profile.svelte";
 
+  // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
+  import MessageCircle from "@lucide/svelte/icons/message-circle";
+  import Users from "@lucide/svelte/icons/users";
+  import Folder from "@lucide/svelte/icons/folder";
+  import Puzzle from "@lucide/svelte/icons/puzzle";
+  import Settings from "@lucide/svelte/icons/settings";
+  import Lock from "@lucide/svelte/icons/lock";
+  import Search from "@lucide/svelte/icons/search";
+
+  let { children } = $props();
+
   // ── State ────────────────────────────────────────────────
   let commandOpen = $state(false);
   let perfMode = $state(false);
@@ -86,20 +97,12 @@
 
   // ── Navigation rail ──────────────────────────────────────
   const navItems = [
-    { icon: "msg", label: "消息", href: "/messages", active: false },
-    { icon: "ppl", label: "通讯录", href: "/contacts", active: false },
-    { icon: "file", label: "文件", href: "/files", active: false },
-    { icon: "plg", label: "插件", href: "/plugins", active: false },
-    { icon: "set", label: "设置", href: "/settings", active: false },
+    { icon: MessageCircle, label: "消息", href: "/messages", active: false },
+    { icon: Users, label: "通讯录", href: "/contacts", active: false },
+    { icon: Folder, label: "文件", href: "/files", active: false },
+    { icon: Puzzle, label: "插件", href: "/plugins", active: false },
+    { icon: Settings, label: "设置", href: "/settings", active: false },
   ];
-
-  const iconPaths: Record<string, string> = {
-    msg:  `<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>`,
-    ppl:  `<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>`,
-    file: `<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>`,
-    plg:  `<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82.33 1.65 1.65 0 0 0 0 2.33 1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 1.82-.33 1.65 1.65 0 0 0 1-2.33z"/><path d="M12 9a3 3 0 0 0-3 3c0 1.5 1.5 3 3 3s3-1.5 3-3-1.5-3-3-3z"/>`,
-    set:  `<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82.33 1.65 1.65 0 0 0 0 2.33 1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 1.82-.33 1.65 1.65 0 0 0 1-2.33z"/><path d="M12 9a3 3 0 0 0-3 3c0 1.5 1.5 3 3 3s3-1.5 3-3-1.5-3-3-3z"/>`,
-  };
 
   let activeNav = $state("/messages");
 
@@ -161,6 +164,7 @@
       <div></div>
 
       {#each resolvedNavItems as item}
+        {@const Icon = item.icon}
         <button
           onclick={() => navigateTo(item.href)}
           class={cn(
@@ -172,16 +176,14 @@
           aria-label={item.label}
           title={item.label}
         >
-          <svg class="h-[18px] w-[18px]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            {@html iconPaths[item.icon]}
-          </svg>
+          <Icon size={18} strokeWidth={2} />
         </button>
       {/each}
     </nav>
 
     <!-- ── Page content (messages / contacts / …) ────── -->
     <main class="min-w-0 flex-1 overflow-hidden">
-      <slot />
+      {@render children()}
     </main>
   </div>
 
@@ -194,9 +196,7 @@
       <span class="text-[11px] text-[var(--p-muted-fg)] tabular-nums">
         API {apiLatency == null ? "—" : `${apiLatency}ms`}
       </span>
-      <svg class="h-3 w-3 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-      </svg>
+      <Lock size={12} class="text-[var(--p-muted-fg)]" />
     </div>
     <div></div>
     <div class="flex items-center gap-2 text-[11px] text-[var(--p-muted-fg)]">
@@ -218,7 +218,7 @@
 
   <!-- ══ Command Palette ════════════════════════════════ -->
   {#if commandOpen}
-    <div role="presentation" class="fixed inset-0 z-[60] bg-black/50" onclick={() => (commandOpen = false)} />
+    <div role="presentation" class="fixed inset-0 z-[60] bg-black/50" onclick={() => (commandOpen = false)}></div>
     <div
       role="dialog"
       aria-modal="true"
@@ -226,9 +226,7 @@
     >
       <div class="flex flex-col overflow-hidden rounded-lg border border-[var(--p-border)] bg-[var(--p-card)] shadow-lg">
         <div class="flex items-center gap-2.5 border-b border-[var(--p-border)] px-4">
-          <svg class="h-4 w-4 shrink-0 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-          </svg>
+          <Search size={16} class="shrink-0 text-[var(--p-muted-fg)]" />
           <input
             type="text"
             placeholder="搜索命令、对话、联系人…"

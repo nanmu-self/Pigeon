@@ -123,7 +123,9 @@ export class EventsGateway
     // 加入个人房间，便于定向推送（后续配合真实登录使用）
     await client.join(`user:${client.data.userId}`);
 
-    const firstSocketOfUser = this.events.markOnline(client.data.userId, client.id);
+    const firstSocketOfUser = client.data.userId.startsWith('guest:')
+      ? false // 游客不参与 presence：不进注册表、不广播，避免噪音事件打到所有客户端
+      : this.events.markOnline(client.data.userId, client.id);
 
     client.emit('connection:welcome', {
       socketId: client.id,
@@ -146,7 +148,7 @@ export class EventsGateway
 
   handleDisconnect(client: IoSocket): void {
     const userId = client.data?.userId;
-    if (!userId) return;
+    if (!userId || userId.startsWith('guest:')) return;
 
     // 该用户的最后一路连接断开 → 广播离线
     if (this.events.markOffline(userId, client.id)) {
