@@ -1,9 +1,12 @@
 # 构建上下文是仓库根目录，把无关/大目录挡在外面
+# 注意：apps/desktop/package.json 是 pnpm workspace 成员清单（lockfile 依赖它），
+# 所以 apps/desktop 不能整目录排除，只排除它的重资产子目录
 .git
 .github
 **/node_modules
-apps/desktop
 apps/desktop/src-tauri
+apps/desktop/.svelte-kit
+apps/desktop/build
 apps/server/dist
 apps/server/.env
 crates

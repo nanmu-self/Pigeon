@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 # 构建上下文 = 仓库根目录（见 deploy/docker-compose.yml 的 build.context）
 # 多阶段：build（全量依赖+源码，同时作为迁移任务容器）/ runtime（仅生产依赖+dist）
 
