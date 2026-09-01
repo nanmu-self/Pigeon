@@ -29,7 +29,7 @@ import type {
 import { PrismaService } from '../prisma.service.js';
 import { WsEventsService } from '../ws/ws-events.service.js';
 import { toPublicUser } from '../users/user.mapper.js';
-import { pgTimestampToMs, toChatMessage, type MessageRow, type SessionRow } from '../sessions/sessions.mapper.js';
+import { toChatMessage, type MessageRow, type SessionRow } from '../sessions/sessions.mapper.js';
 
 /** 群规模上限 */
 const MAX_MEMBERS = 200;
@@ -99,7 +99,6 @@ export class GroupsService {
    * 并广播 message:new —— 复用消息链路，全员聊天流内可见。
    */
   private async createSystemMessage(sessionId: number, content: string): Promise<void> {
-    const now = new Date().toISOString();
     const message = await this.prisma.client.transaction(async (tx) => {
       const row = (await tx.orm.public.Message.create({
         sessionId,
@@ -234,7 +233,6 @@ export class GroupsService {
       throw new BadRequestException(`群成员不能超过 ${MAX_MEMBERS} 人`);
     }
 
-    const group = await this.sessionRow(groupId);
     const names: string[] = [];
     for (const id of toAdd) {
       if (!(await this.areFriends(meId, id))) {
@@ -250,7 +248,6 @@ export class GroupsService {
 
     await this.createSystemMessage(groupId, `${names.join('、')} 加入了群聊`);
     this.broadcastGroupUpdated(String(groupId));
-    void group;
   }
 
   /** 踢出成员：群主可踢管理员/成员；管理员仅可踢成员；不能踢自己（走退群） */

@@ -11,7 +11,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import type { FriendItem, FriendRequestItem } from '@pigeon/shared-types';
+import type { FriendItem, FriendRequestItem, PublicUser } from '@pigeon/shared-types';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import type { JwtPayload } from '../auth/auth.service.js';
 import { FriendsService } from './friends.service.js';
@@ -51,6 +51,11 @@ export class FriendsController {
   @Get('requests')
   listRequests(@Req() req: AuthedRequest): Promise<FriendRequestItem[]> {
     return this.friends.listRequests(req.user.userId);
+  }
+
+  @Get('blocked')
+  listBlocked(@Req() req: AuthedRequest): Promise<PublicUser[]> {
+    return this.friends.listBlocked(req.user.userId);
   }
 
   @Post('requests')

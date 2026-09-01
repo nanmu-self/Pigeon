@@ -15,6 +15,9 @@ export const friendsApi = {
   /** 待处理申请（incoming = 等我处理；outgoing = 等对方处理） */
   requests: () => http.Get<FriendRequestItem[]>('/friends/requests'),
 
+  /** 我拉黑的用户列表（解除拉黑入口） */
+  listBlocked: () => http.Get<PublicUser[]>('/friends/blocked'),
+
   /** 发起好友申请 */
   sendRequest: (userId: number) =>
     http.Post<FriendRequestItem>('/friends/requests', { userId }),

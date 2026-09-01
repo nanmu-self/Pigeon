@@ -1,101 +1,458 @@
 <script lang="ts">
-  let contacts = $state([
-    { id: 1, name: "张三", avatar: "张", status: "online", signature: "今天天气不错" },
-    { id: 2, name: "李四", avatar: "李", status: "offline", signature: "忙碌中..." },
-    { id: 3, name: "王五", avatar: "王", status: "online", signature: "周末有空吗？" },
-    { id: 4, name: "赵六", avatar: "赵", status: "offline", signature: "" },
-    { id: 5, name: "陈七", avatar: "陈", status: "online", signature: "在吗？" },
-    { id: 6, name: "刘八", avatar: "刘", status: "offline", signature: "" },
-    { id: 7, name: "周九", avatar: "周", status: "online", signature: "明天开会" },
-    { id: 8, name: "吴十", avatar: "吴", status: "offline", signature: "" },
-    { id: 9, name: "郑十一", avatar: "郑", status: "online", signature: "项目进展顺利" },
-    { id: 10, name: "钱十二", avatar: "钱", status: "offline", signature: "" },
-  ]);
+  import { onMount } from "svelte";
+  import { goto } from "$app/navigation";
+  import { chat } from "$lib/chat-store.svelte";
+  import { friendsApi } from "$lib/api/friends";
+  import { usersApi } from "$lib/api/users";
+  import { ws } from "$lib/api/socket.svelte";
+  import { showToast } from "$lib/toast";
+  import type {
+    FriendItem,
+    FriendRequestItem,
+    PublicUser,
+  } from "@pigeon/shared-types";
 
+  // ── 数据 ─────────────────────────────────────────────────
+  let friends = $state<FriendItem[]>([]);
+  let requests = $state<FriendRequestItem[]>([]);
+  let blocked = $state<PublicUser[]>([]);
+  let loading = $state(true);
+
+  /** 添加好友：搜索结果 */
   let searchQuery = $state("");
+  let searchResults = $state<PublicUser[]>([]);
+  let searching = $state(false);
+  /** 已发起申请的用户（本地标记，避免重复点击） */
+  const requestedIds = $state(new Set<number>());
 
-  let filteredContacts = $derived(
-    contacts.filter((c) =>
-      c.name.toLowerCase().includes(searchQuery.toLowerCase())
-    )
+  /** 选中的好友（右栏资料卡） */
+  let selected = $state<FriendItem | null>(null);
+
+  /** 发起群聊面板 */
+  let groupPanelOpen = $state(false);
+  let newGroupName = $state("");
+  let pickedIds = $state<number[]>([]);
+  let creatingGroup = $state(false);
+
+  const incomingRequests = $derived(requests.filter((r) => r.direction === "incoming"));
+  const outgoingRequests = $derived(requests.filter((r) => r.direction === "outgoing"));
+  const filteredFriends = $derived(
+    friends.filter((f) =>
+      f.user.nickname.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+    ),
   );
+
+  async function refresh() {
+    try {
+      [friends, requests, blocked] = await Promise.all([
+        friendsApi.list(),
+        friendsApi.requests(),
+        friendsApi.listBlocked(),
+      ]);
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      loading = false;
+    }
+  }
+
+  onMount(() => {
+    void refresh();
+    // WS 实时：收到申请 / 申请被通过 / 上下线 —— 保持列表鲜活
+    const onFriendRequest = () => {
+      showToast("收到新的好友申请", { type: "info" });
+      void refresh();
+    };
+    const onFriendAccepted = () => void refresh();
+    const onPresence = () => void refresh();
+    ws.on("friend:request", onFriendRequest);
+    ws.on("friend:accepted", onFriendAccepted);
+    ws.on("presence:update", onPresence);
+    return () => {
+      ws.off("friend:request", onFriendRequest);
+      ws.off("friend:accepted", onFriendAccepted);
+      ws.off("presence:update", onPresence);
+    };
+  });
+
+  // ── 搜索添加 ─────────────────────────────────────────────
+
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  function onSearchInput() {
+    if (searchTimer) clearTimeout(searchTimer);
+    const q = searchQuery.trim();
+    if (!q) {
+      searchResults = [];
+      return;
+    }
+    searchTimer = setTimeout(async () => {
+      searching = true;
+      try {
+        searchResults = await usersApi.search(q);
+      } catch (e) {
+        showToast(e instanceof Error ? e.message : String(e));
+      } finally {
+        searching = false;
+      }
+    }, 300);
+  }
+
+  async function sendRequest(userId: number) {
+    try {
+      await friendsApi.sendRequest(userId);
+      requestedIds.add(userId);
+      showToast("好友申请已发送", { type: "success" });
+      void refresh(); // 若对方此前申请过我 → 服务端 409 时本地状态为准
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+      void refresh();
+    }
+  }
+
+  /** 搜索结果行的状态提示（已是好友 / 已申请 / 可申请） */
+  function resultState(userId: number): { label: string; action: "add" | "chat" | "none" } {
+    if (friends.some((f) => f.user.id === userId)) return { label: "发消息", action: "chat" };
+    if (requestedIds.has(userId)) return { label: "已申请", action: "none" };
+    if (requests.some((r) => r.direction === "outgoing" && r.user.id === userId)) {
+      return { label: "已申请", action: "none" };
+    }
+    if (requests.some((r) => r.direction === "incoming" && r.user.id === userId)) {
+      return { label: "对方已申请", action: "none" };
+    }
+    return { label: "加好友", action: "add" };
+  }
+
+  // ── 申请处理 ─────────────────────────────────────────────
+
+  async function accept(requestId: number) {
+    try {
+      await friendsApi.accept(requestId);
+      showToast("已添加好友", { type: "success" });
+      await refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function decline(requestId: number) {
+    try {
+      await friendsApi.decline(requestId);
+      await refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // ── 好友操作 ─────────────────────────────────────────────
+
+  async function startChat(userId: number) {
+    try {
+      await chat.createSession(userId);
+      await goto("/messages");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function removeFriend(userId: number, nickname: string) {
+    if (!confirm(`确定删除好友「${nickname}」吗？聊天记录将保留。`)) return;
+    try {
+      await friendsApi.remove(userId);
+      showToast("已删除好友", { type: "success" });
+      if (selected?.user.id === userId) selected = null;
+      await refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  async function toggleBlock(userId: number, unblock: boolean) {
+    try {
+      if (unblock) await friendsApi.unblock(userId);
+      else await friendsApi.block(userId);
+      showToast(unblock ? "已解除拉黑" : "已拉黑", { type: "success" });
+      selected = null; // 拉黑后好友从列表消失（解除入口在「已拉黑」区）
+      await refresh();
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // ── 建群 ─────────────────────────────────────────────────
+
+  async function submitCreateGroup() {
+    const name = newGroupName.trim();
+    if (!name || pickedIds.length === 0) return;
+    creatingGroup = true;
+    try {
+      await chat.createGroup(name, pickedIds);
+      showToast("群聊已创建", { type: "success" });
+      groupPanelOpen = false;
+      newGroupName = "";
+      pickedIds = [];
+      await goto("/messages");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      creatingGroup = false;
+    }
+  }
 </script>
 
-<div class="flex h-full w-full overflow-hidden bg-background">
-  <!-- Sidebar -->
-  <div class="w-80 border-r bg-card flex flex-col">
-    <!-- Header -->
-    <div class="flex items-center justify-between border-b px-4 py-3">
-      <h1 class="text-xl font-semibold text-foreground">通讯录</h1>
-      <button class="rounded-full p-2 hover:bg-muted transition-colors">
-        <svg class="h-5 w-5 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
-          <circle cx="9" cy="7" r="4"/>
-          <line x1="19" y1="8" x2="19" y2="14"/>
-          <line x1="22" y1="11" x2="16" y2="11"/>
-        </svg>
+<div class="flex h-full bg-[var(--p-bg)]">
+  <!-- ══ 左栏：列表 ══════════════════════════════════════ -->
+  <div class="flex w-96 shrink-0 flex-col border-r border-[var(--p-border)] bg-[var(--p-card)]">
+    <div class="flex items-center justify-between border-b border-[var(--p-border)] px-4 py-3">
+      <h1 class="text-xl font-semibold text-[var(--p-fg)]">通讯录</h1>
+      <button
+        class="rounded-full p-2 transition-colors hover:bg-[var(--p-muted)]"
+        title="发起群聊"
+        onclick={async () => {
+          groupPanelOpen = !groupPanelOpen;
+          if (groupPanelOpen) void chat.loadFriends();
+        }}
+      >
+        <svg class="h-4.5 w-4.5 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
       </button>
     </div>
 
-    <!-- Search -->
-    <div class="px-3 py-2">
-      <div class="relative">
-        <svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-        </svg>
-        <input
-          type="text"
-          placeholder="搜索联系人"
-          bind:value={searchQuery}
-          class="h-9 w-full rounded-md border border-input bg-background pl-9 pr-3 text-sm placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-        />
-      </div>
-    </div>
-
-    <!-- Contact List -->
-    <div class="flex-1 overflow-y-auto">
-      {#each filteredContacts as contact (contact.id)}
-        <button
-          class="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/50"
-        >
-          <!-- Avatar -->
-          <div class="relative flex-shrink-0">
-            <div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground font-medium text-sm">
-              {contact.avatar}
-            </div>
-            {#if contact.status === "online"}
-              <div class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-green-500"></div>
-            {/if}
-          </div>
-
-          <!-- Info -->
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center justify-between">
-              <span class="font-medium text-foreground text-sm">{contact.name}</span>
-            </div>
-            <p class="text-xs text-muted-foreground truncate mt-0.5">{contact.signature || "暂无签名"}</p>
-          </div>
-        </button>
-      {/each}
-
-      {#if filteredContacts.length === 0}
-        <div class="px-4 py-8 text-center text-sm text-muted-foreground">
-          未找到联系人
+    <!-- 发起群聊面板 -->
+    {#if groupPanelOpen}
+      <div class="border-b border-[var(--p-border)] bg-[var(--p-muted)]/40">
+        <div class="px-3 pt-2">
+          <input
+            type="text"
+            bind:value={newGroupName}
+            placeholder="群名称"
+            class="h-8 w-full rounded-md border border-[var(--p-border)] bg-[var(--p-bg)] px-2.5 text-xs text-[var(--p-fg)] placeholder:text-[var(--p-muted-fg)] focus:border-[var(--p-primary)] focus:outline-none"
+          />
         </div>
+        <div class="scroll-area-thin max-h-52 overflow-y-auto py-1">
+          {#each friends as friend (friend.user.id)}
+            <button
+              class="flex w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-[var(--p-muted)]/60"
+              onclick={() => {
+                pickedIds = pickedIds.includes(friend.user.id)
+                  ? pickedIds.filter((id) => id !== friend.user.id)
+                  : [...pickedIds, friend.user.id];
+              }}
+            >
+              <input type="checkbox" checked={pickedIds.includes(friend.user.id)} class="pointer-events-none" />
+              <span class="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--p-secondary)] text-xs font-medium text-[var(--p-secondary-fg)]">{friend.user.nickname.slice(0, 1)}</span>
+              <span class="flex-1 truncate text-sm text-[var(--p-fg)]">{friend.user.nickname}</span>
+              {#if friend.online}<span class="h-2 w-2 rounded-full bg-green-500"></span>{/if}
+            </button>
+          {/each}
+        </div>
+        <div class="border-t border-[var(--p-border)] px-3 py-2">
+          <button
+            class="w-full rounded-md bg-[var(--p-primary)] py-1.5 text-xs font-medium text-[var(--p-primary-fg)] transition-opacity disabled:opacity-50"
+            disabled={creatingGroup || !newGroupName.trim() || pickedIds.length === 0}
+            onclick={() => void submitCreateGroup()}
+          >
+            {creatingGroup ? "创建中…" : `创建群聊（${pickedIds.length + 1} 人）`}
+          </button>
+        </div>
+      </div>
+    {/if}
+
+    <div class="flex-1 overflow-y-auto">
+      {#if loading}
+        <p class="px-4 py-6 text-center text-sm text-[var(--p-muted-fg)]">加载中…</p>
+      {:else}
+        <!-- 好友申请 -->
+        {#if incomingRequests.length > 0}
+          <p class="px-4 pb-1 pt-4 text-xs font-medium text-[var(--p-muted-fg)]">
+            好友申请（{incomingRequests.length}）
+          </p>
+          {#each incomingRequests as r (r.id)}
+            <div class="flex items-center gap-3 px-4 py-2.5">
+              <span class="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--p-secondary)] text-sm font-medium text-[var(--p-secondary-fg)]">{r.user.nickname.slice(0, 1)}</span>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-[var(--p-fg)]">{r.user.nickname}</p>
+                <p class="truncate text-xs text-[var(--p-muted-fg)]">{r.user.email}</p>
+              </div>
+              <button
+                class="rounded-md bg-[var(--p-primary)] px-2.5 py-1 text-xs font-medium text-[var(--p-primary-fg)]"
+                onclick={() => void accept(r.id)}
+              >通过</button>
+              <button
+                class="rounded-md border border-[var(--p-border)] px-2.5 py-1 text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
+                onclick={() => void decline(r.id)}
+              >拒绝</button>
+            </div>
+          {/each}
+        {/if}
+
+        <!-- 我的好友 -->
+        <p class="px-4 pb-1 pt-4 text-xs font-medium text-[var(--p-muted-fg)]">
+          我的好友（{friends.length}）
+        </p>
+        {#if friends.length === 0}
+          <p class="px-4 py-6 text-center text-sm text-[var(--p-muted-fg)]">
+            还没有好友，在右侧搜索添加
+          </p>
+        {:else}
+          {#each filteredFriends as friend (friend.user.id)}
+            <button
+              class="flex w-full items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-[var(--p-muted)]/50 {selected?.user.id === friend.user.id ? 'bg-[var(--p-muted)]/70' : ''}"
+              onclick={() => (selected = selected?.user.id === friend.user.id ? null : friend)}
+            >
+              <div class="relative shrink-0">
+                <span class="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--p-primary)] text-sm font-medium text-[var(--p-primary-fg)]">{friend.user.nickname.slice(0, 1)}</span>
+                {#if friend.online}
+                  <span class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-[var(--p-card)] bg-green-500"></span>
+                {/if}
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm font-medium text-[var(--p-fg)]">{friend.user.nickname}</p>
+                <p class="truncate text-xs text-[var(--p-muted-fg)]">{friend.online ? "在线" : "离线"}</p>
+              </div>
+            </button>
+          {/each}
+        {/if}
+
+        <!-- 已拉黑（解除入口） -->
+        {#if blocked.length > 0}
+          <p class="px-4 pb-1 pt-4 text-xs font-medium text-[var(--p-muted-fg)]">
+            已拉黑（{blocked.length}）
+          </p>
+          {#each blocked as user (user.id)}
+            <div class="flex items-center gap-3 px-4 py-2 opacity-60">
+              <span class="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--p-secondary)] text-sm font-medium text-[var(--p-secondary-fg)]">{user.nickname.slice(0, 1)}</span>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm text-[var(--p-fg)]">{user.nickname}</p>
+                <p class="text-xs text-[var(--p-muted-fg)]">对方无法向你发起会话与申请</p>
+              </div>
+              <button
+                class="rounded-md border border-[var(--p-border)] px-2.5 py-1 text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
+                onclick={() => void toggleBlock(user.id, true)}
+              >解除拉黑</button>
+            </div>
+          {/each}
+        {/if}
+
+        <!-- 发出的申请 -->
+        {#if outgoingRequests.length > 0}
+          <p class="px-4 pb-1 pt-4 text-xs font-medium text-[var(--p-muted-fg)]">
+            已发出（等待对方处理）
+          </p>
+          {#each outgoingRequests as r (r.id)}
+            <div class="flex items-center gap-3 px-4 py-2 opacity-60">
+              <span class="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--p-secondary)] text-sm font-medium text-[var(--p-secondary-fg)]">{r.user.nickname.slice(0, 1)}</span>
+              <div class="min-w-0 flex-1">
+                <p class="truncate text-sm text-[var(--p-fg)]">{r.user.nickname}</p>
+                <p class="text-xs text-[var(--p-muted-fg)]">等待对方处理…</p>
+              </div>
+            </div>
+          {/each}
+        {/if}
       {/if}
     </div>
   </div>
 
-  <!-- Detail Area (placeholder) -->
-  <div class="flex flex-1 items-center justify-center bg-muted/30">
-    <div class="text-center">
-      <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted">
-        <svg class="h-8 w-8 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-          <circle cx="12" cy="7" r="4"/>
-        </svg>
+  <!-- ══ 右栏：添加好友 / 好友资料 ══════════════════════ -->
+  <div class="flex min-w-0 flex-1 flex-col overflow-y-auto bg-[var(--p-muted)]/30">
+    {#if selected}
+      <!-- 好友资料卡 -->
+      <div class="mx-auto w-full max-w-md px-6 py-10">
+        <div class="flex flex-col items-center">
+          <div class="relative">
+            <span class="flex h-20 w-20 items-center justify-center rounded-full bg-[var(--p-primary)] text-2xl font-medium text-[var(--p-primary-fg)]">{selected.user.nickname.slice(0, 1)}</span>
+            {#if selected.online}
+              <span class="absolute bottom-1 right-1 h-4 w-4 rounded-full border-2 border-[var(--p-bg)] bg-green-500"></span>
+            {/if}
+          </div>
+          <p class="mt-3 text-lg font-semibold text-[var(--p-fg)]">{selected.user.nickname}</p>
+          <p class="text-sm text-[var(--p-muted-fg)]">{selected.user.email}</p>
+          <p class="mt-1 text-xs text-[var(--p-muted-fg)]">{selected.online ? "在线" : "离线"} · 成为好友于 {selected.since.slice(0, 10)}</p>
+        </div>
+
+        <div class="mt-8 space-y-2">
+          <button
+            class="flex w-full items-center gap-3 rounded-lg border border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3 text-sm text-[var(--p-fg)] transition-colors hover:bg-[var(--p-muted)]"
+            onclick={() => void startChat(selected!.user.id)}
+          >
+            <svg class="h-4.5 w-4.5 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            发消息
+          </button>
+          <button
+            class="flex w-full items-center gap-3 rounded-lg border border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3 text-sm text-[var(--p-fg)] transition-colors hover:bg-[var(--p-muted)]"
+            onclick={() => {
+              if (confirm(`确定拉黑「${selected!.user.nickname}」吗？解除入口在左侧「已拉黑」区。`)) {
+                void toggleBlock(selected!.user.id, false);
+              }
+            }}
+            title="拉黑后对方无法向你发起会话与申请"
+          >
+            <svg class="h-4.5 w-4.5 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+            拉黑
+          </button>
+          <button
+            class="flex w-full items-center gap-3 rounded-lg border border-red-200 bg-[var(--p-card)] px-4 py-3 text-sm text-red-500 transition-colors hover:bg-red-50 dark:border-red-900/50 dark:hover:bg-red-900/20"
+            onclick={() => void removeFriend(selected!.user.id, selected!.user.nickname)}
+          >
+            <svg class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            删除好友
+          </button>
+        </div>
       </div>
-      <p class="text-muted-foreground">选择联系人查看详情</p>
-    </div>
+    {:else}
+      <!-- 添加好友面板 -->
+      <div class="mx-auto w-full max-w-md px-6 py-10">
+        <h2 class="mb-1 text-lg font-semibold text-[var(--p-fg)]">添加好友</h2>
+        <p class="mb-4 text-sm text-[var(--p-muted-fg)]">按邮箱精确搜索，或按昵称模糊搜索</p>
+
+        <div class="relative">
+          <svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            type="text"
+            bind:value={searchQuery}
+            oninput={onSearchInput}
+            placeholder="输入邮箱或昵称"
+            class="h-10 w-full rounded-lg border border-[var(--p-border)] bg-[var(--p-card)] pl-9 pr-3 text-sm text-[var(--p-fg)] placeholder:text-[var(--p-muted-fg)] focus:border-[var(--p-primary)] focus:outline-none"
+          />
+        </div>
+
+        <div class="mt-4 space-y-2">
+          {#if searching}
+            <p class="py-4 text-center text-sm text-[var(--p-muted-fg)]">搜索中…</p>
+          {:else if searchQuery.trim() && searchResults.length === 0}
+            <p class="py-4 text-center text-sm text-[var(--p-muted-fg)]">没有找到匹配的用户</p>
+          {:else}
+            {#each searchResults as user (user.id)}
+              {@const st = resultState(user.id)}
+              <div class="flex items-center gap-3 rounded-lg border border-[var(--p-border)] bg-[var(--p-card)] px-4 py-2.5">
+                <span class="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--p-secondary)] text-sm font-medium text-[var(--p-secondary-fg)]">{user.nickname.slice(0, 1)}</span>
+                <div class="min-w-0 flex-1">
+                  <p class="truncate text-sm font-medium text-[var(--p-fg)]">{user.nickname}</p>
+                  <p class="truncate text-xs text-[var(--p-muted-fg)]">{user.email}</p>
+                </div>
+                {#if st.action === "add"}
+                  <button
+                    class="rounded-md bg-[var(--p-primary)] px-3 py-1.5 text-xs font-medium text-[var(--p-primary-fg)]"
+                    onclick={() => void sendRequest(user.id)}
+                  >{st.label}</button>
+                {:else if st.action === "chat"}
+                  <button
+                    class="rounded-md border border-[var(--p-border)] px-3 py-1.5 text-xs text-[var(--p-fg)] hover:bg-[var(--p-muted)]"
+                    onclick={() => void startChat(user.id)}
+                  >{st.label}</button>
+                {:else}
+                  <span class="text-xs text-[var(--p-muted-fg)]">{st.label}</span>
+                {/if}
+              </div>
+            {/each}
+          {/if}
+        </div>
+
+        {#if !searchQuery.trim()}
+          <div class="mt-10 rounded-lg border border-dashed border-[var(--p-border)] p-4 text-sm text-[var(--p-muted-fg)]">
+            <p class="font-medium">提示</p>
+            <p class="mt-1 leading-relaxed">• 拉黑在好友资料卡中操作（拉黑后对方无法向你发起会话与申请）<br />• 收到好友申请时会实时出现在左侧「好友申请」区</p>
+          </div>
+        {/if}
+      </div>
+    {/if}
   </div>
 </div>

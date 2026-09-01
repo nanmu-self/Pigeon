@@ -271,8 +271,9 @@ export interface SessionSummary {
   /** 单聊：对端资料 */
   peer?: PublicUser;
   peerOnline?: boolean;
-  /** 群聊：群名称 / 成员数 / 我的角色 / 全员禁言 */
+  /** 群聊：群名称 / 头像 / 成员数 / 我的角色 / 全员禁言 */
   name?: string;
+  avatarUrl?: string;
   memberCount?: number;
   myRole?: 'owner' | 'admin' | 'member';
   muteAll?: boolean;

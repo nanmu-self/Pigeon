@@ -78,6 +78,15 @@ export class FriendsService {
     return items.sort((a, b) => b.since.localeCompare(a.since));
   }
 
+  /** 我拉黑的用户列表（解除拉黑的入口；被别人拉黑的不在其中） */
+  async listBlocked(meId: number): Promise<PublicUser[]> {
+    const rows = (await this.prisma.orm.public.Friendship.where({
+      status: 'blocked',
+      blockedById: meId,
+    }).all()) as FriendshipRow[];
+    return Promise.all(rows.map((row) => this.publicUser(this.peerIdOf(row, meId))));
+  }
+
   /** 待处理申请（incoming = 等我处理；outgoing = 等对方处理） */
   async listRequests(meId: number): Promise<FriendRequestItem[]> {
     const pending = await this.prisma.orm.public.Friendship.where({ status: 'pending' }).all();

@@ -340,9 +340,13 @@
             class="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--p-muted)]/50 {chat.current?.id === session.id ? 'bg-[var(--p-muted)]/70' : ''}"
           >
             <div class="relative shrink-0">
-              <div class="flex h-12 w-12 items-center justify-center rounded-full {session.kind === 'group' ? 'rounded-xl bg-[var(--p-secondary)]' : 'bg-[var(--p-primary)]'} font-medium text-[var(--p-primary-fg)]">
-                {sessionAvatarText(session)}
-              </div>
+              {#if session.avatarUrl}
+                <img src={session.avatarUrl} alt={sessionTitle(session)} class="h-12 w-12 rounded-xl object-cover" />
+              {:else}
+                <div class="flex h-12 w-12 items-center justify-center rounded-full {session.kind === 'group' ? 'rounded-xl bg-[var(--p-secondary)]' : 'bg-[var(--p-primary)]'} font-medium text-[var(--p-primary-fg)]">
+                  {sessionAvatarText(session)}
+                </div>
+              {/if}
               {#if session.kind === 'direct' && session.peerOnline}
                 <div class="absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-2 border-[var(--p-card)] bg-green-500"></div>
               {/if}

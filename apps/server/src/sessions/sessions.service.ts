@@ -173,6 +173,7 @@ export class SessionsService {
           const count = await this.memberCount(row.id);
           return toSessionSummary(row, {
             name: row.name ?? '群聊',
+            avatarUrl: row.avatarUrl ?? undefined,
             memberCount: count,
             myRole: (member?.role as 'owner' | 'admin' | 'member' | null) ?? 'member',
             muteAll: row.muteAll,

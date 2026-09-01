@@ -80,6 +80,7 @@ export function toSessionSummary(
     peer?: PublicUser;
     peerOnline?: boolean;
     name?: string;
+    avatarUrl?: string;
     memberCount?: number;
     myRole?: 'owner' | 'admin' | 'member';
     muteAll?: boolean;
@@ -92,6 +93,7 @@ export function toSessionSummary(
     kind: row.kind,
     ...(opts.peer ? { peer: opts.peer, peerOnline: opts.peerOnline ?? false } : {}),
     ...(opts.name !== undefined ? { name: opts.name, memberCount: opts.memberCount, myRole: opts.myRole, muteAll: opts.muteAll } : {}),
+    ...(opts.avatarUrl ? { avatarUrl: opts.avatarUrl } : {}),
     unreadCount: opts.unreadCount,
     lastMessageAt: row.lastMessageAt,
     createdAt: row.createdAt,
