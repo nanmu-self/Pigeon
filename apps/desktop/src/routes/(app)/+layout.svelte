@@ -6,6 +6,7 @@
   import { ws } from "$lib/api/socket.svelte";
   import { serverApi } from "$lib/api/http";
   import { profile } from "$lib/api/profile.svelte";
+  import CallOverlay from "$lib/components/CallOverlay.svelte";
 
   // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
   import MessageCircle from "@lucide/svelte/icons/message-circle";
@@ -186,6 +187,9 @@
       {@render children()}
     </main>
   </div>
+
+  <!-- 全局通话浮层（音视频，WebRTC P2P） -->
+  <CallOverlay />
 
   <!-- ══ Status Bar ═════════════════════════════════════ -->
   <footer class="flex h-7 shrink-0 items-center border-t border-[var(--p-border)] bg-[var(--p-card)] px-3 font-mono select-none">

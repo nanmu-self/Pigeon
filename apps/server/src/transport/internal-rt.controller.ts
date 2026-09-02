@@ -16,6 +16,7 @@ import type { Request } from 'express';
 import type { MessageReadAck, WsChatMessage } from '@pigeon/shared-types';
 import { HttpException } from '@nestjs/common';
 import { SessionsService } from '../sessions/sessions.service.js';
+import { CallService } from '../call/call.service.js';
 import { InternalTokenGuard } from './internal-token.guard.js';
 
 /**
@@ -37,6 +38,7 @@ export class InternalRtController {
   constructor(
     // swc 编译无装饰器元数据，注入一律显式 @Inject（与全仓库约定一致）
     @Inject(SessionsService) private readonly sessions: SessionsService,
+    @Inject(CallService) private readonly calls: CallService,
   ) {}
 
   /** Rust 转发的用户上下文头（guest 分支的 Number.isInteger 校验保留，防内部头伪造） */
@@ -87,6 +89,13 @@ export class InternalRtController {
           return { ok: true, data: await this.onReactionAdd(request, payload) };
         case 'reaction:remove':
           return { ok: true, data: await this.onReactionRemove(request, payload) };
+        case 'call:invite':
+        case 'call:accept':
+        case 'call:reject':
+        case 'call:cancel':
+        case 'call:hangup':
+        case 'webrtc:signal':
+          return { ok: true, data: this.onCallSignal(request, type, payload) };
         default:
           // typing/conversation 系列是协议保留位（D2 死代码确认），不实现
           throw new NotFoundException(`unknown rt type: ${type}`);
@@ -94,6 +103,31 @@ export class InternalRtController {
     } catch (error) {
       if (error instanceof UnauthorizedException || error instanceof NotFoundException) throw error;
       return { ok: false, error: this.errorText(error) };
+    }
+  }
+
+  // ── 音视频通话信令（Socket.IO 路径 events.gateway.ts 同源：CallService） ──
+
+  private async onCallSignal(
+    request: Request,
+    type: string,
+    payload: unknown,
+  ): Promise<{ callId: string; ringTimeoutMs: number } | { callId: string } | null> {
+    const { userId, displayName } = this.userContext(request);
+    const body = (payload ?? {}) as { callId?: string; targetUserId?: string; media?: 'audio' | 'video'; data?: never; reason?: string };
+    switch (type) {
+      case 'call:invite':
+        return await this.calls.invite(userId, displayName, body);
+      case 'call:accept':
+        return this.calls.accept(userId, body);
+      case 'call:reject':
+        return this.calls.reject(userId, body);
+      case 'call:cancel':
+        return this.calls.cancel(userId, body);
+      case 'call:hangup':
+        return this.calls.hangup(userId, body);
+      default:
+        return this.calls.signal(userId, body);
     }
   }
 

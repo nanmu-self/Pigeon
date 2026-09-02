@@ -7,6 +7,7 @@ import { PrismaModule } from './prisma.module.js';
 import { FriendsModule } from './friends/friends.module.js';
 import { GroupsModule } from './groups/groups.module.js';
 import { SessionsModule } from './sessions/sessions.module.js';
+import { CallModule } from './call/call.module.js';
 import { StorageModule } from './storage/storage.module.js';
 import { TransportModule } from './transport/transport.module.js';
 import { UsersModule } from './users/users.module.js';
@@ -32,6 +33,8 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     FriendsModule,
     // 会话与消息（建会话/历史/已读回执；WS 消息落库也在其中）
     SessionsModule,
+    // 音视频通话信令（1:1，WebRTC P2P 媒体；信令经 RT 通道转发）
+    CallModule,
     // 群聊（建群/邀请/踢出/转让/公告/禁言/成员列表）
     GroupsModule,
     // Distributed tracing, auto-correlated logs, request/job metrics, error

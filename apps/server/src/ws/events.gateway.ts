@@ -16,12 +16,14 @@ import type {
   SocketData,
   WsAckCallback,
   WsChatMessage,
+  CallSignal,
 } from '@pigeon/shared-types';
 import { HttpException, Inject, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { allowedOrigins } from '../config.js';
 import type { JwtPayload } from '../auth/auth.service.js';
 import { SessionsService } from '../sessions/sessions.service.js';
+import { CallService } from '../call/call.service.js';
 import { WsEventsService, type IoServer } from './ws-events.service.js';
 
 /** ack 回调（client → server 事件的最后一个参数） */
@@ -66,6 +68,7 @@ export class EventsGateway
     @Inject(WsEventsService) private readonly events: WsEventsService,
     @Inject(JwtService) private readonly jwt: JwtService,
     @Inject(SessionsService) private readonly sessions: SessionsService,
+    @Inject(CallService) private readonly calls: CallService,
   ) {}
 
   /** 把业务异常（HttpException）转成给客户端的 ack 文案 */
@@ -158,6 +161,10 @@ export class EventsGateway
         at: Date.now(),
       });
     }
+
+    // 断线时终止其进行中的通话（对端收到 cancelled/ended；wt 轨由振铃超时兜底）
+    const numericUserId = Number(userId);
+    if (Number.isInteger(numericUserId)) this.calls.handleUserOffline(numericUserId);
 
     this.logger.log(`- ${client.id} as ${userId} (online: ${this.events.onlineCount})`);
   }
@@ -380,5 +387,80 @@ export class EventsGateway
     ack?: Ack<{ pong: number; online: number }>,
   ): void {
     ack?.({ ok: true, data: { pong: Date.now(), online: this.events.onlineCount } });
+  }
+
+  // ──── 音视频通话信令（媒体走 WebRTC P2P，这里只转发） ────
+
+  /** 游客无通话功能；文案风格与其余 handler 一致 */
+  private requireUserId(client: IoSocket): number {
+    const userId = Number(client.data.userId);
+    if (!Number.isInteger(userId)) {
+      throw new HttpException('游客没有通话功能，请先登录', 403);
+    }
+    return userId;
+  }
+
+  @SubscribeMessage('call:invite')
+  async onCallInvite(
+    client: IoSocket,
+    payload: { targetUserId: string; media: 'audio' | 'video' },
+    ack?: Ack<{ callId: string; ringTimeoutMs: number }>,
+  ): Promise<void> {
+    try {
+      const userId = this.requireUserId(client);
+      const result = await this.calls.invite(userId, client.data.displayName, payload ?? {});
+      ack?.({ ok: true, data: result });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
+
+  @SubscribeMessage('call:accept')
+  onCallAccept(client: IoSocket, payload: { callId: string }, ack?: Ack<{ callId: string }>): void {
+    try {
+      ack?.({ ok: true, data: this.calls.accept(this.requireUserId(client), payload ?? {}) });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
+
+  @SubscribeMessage('call:reject')
+  onCallReject(client: IoSocket, payload: { callId: string; reason?: string }, ack?: Ack<null>): void {
+    try {
+      ack?.({ ok: true, data: this.calls.reject(this.requireUserId(client), payload ?? {}) });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
+
+  @SubscribeMessage('call:cancel')
+  onCallCancel(client: IoSocket, payload: { callId: string }, ack?: Ack<null>): void {
+    try {
+      ack?.({ ok: true, data: this.calls.cancel(this.requireUserId(client), payload ?? {}) });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
+
+  @SubscribeMessage('call:hangup')
+  onCallHangup(client: IoSocket, payload: { callId: string }, ack?: Ack<null>): void {
+    try {
+      ack?.({ ok: true, data: this.calls.hangup(this.requireUserId(client), payload ?? {}) });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
+  }
+
+  @SubscribeMessage('webrtc:signal')
+  onWebRtcSignal(
+    client: IoSocket,
+    payload: { callId: string; data: CallSignal },
+    ack?: Ack<null>,
+  ): void {
+    try {
+      ack?.({ ok: true, data: this.calls.signal(this.requireUserId(client), payload ?? {}) });
+    } catch (error) {
+      ack?.({ ok: false, error: this.errorText(error) });
+    }
   }
 }

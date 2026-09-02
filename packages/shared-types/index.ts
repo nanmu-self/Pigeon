@@ -386,7 +386,43 @@ export interface WsPresenceState {
   at: number;
 }
 
-/** Server → Client */
+// ─────────────────────────────────────────────────────────────
+// 音视频通话（WebRTC P2P 媒体 + RT 通道信令）契约
+//
+// 媒体流走 Svelte ↔ Svelte 的 RTCPeerConnection（P2P，不过服务器）；
+// 信令（invite/accept/SDP/ICE）走现有实时通道（Socket.IO 或
+// WebTransport→Rust→Nest，Rust 网关按 type 透传、不落库）。
+// 通话登记在 Nest 内存（CallService），不写数据库。
+// ─────────────────────────────────────────────────────────────
+
+/** 通话媒体类型 */
+export type CallMedia = 'audio' | 'video';
+
+/** SDP / ICE 信令载荷（webrtc:signal 的 data 字段，服务端不解析只转发） */
+export type CallSignal =
+  | { type: 'offer'; sdp: string }
+  | { type: 'answer'; sdp: string }
+  | {
+      type: 'ice';
+      candidate: { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null };
+    };
+
+/** S2C：来电（被叫收到后振铃） */
+export interface WsCallIncoming {
+  callId: string;
+  fromUserId: string;
+  fromName: string;
+  media: CallMedia;
+  createdAt: number;
+}
+
+/** S2C：通话状态变化通知（推给另一方） */
+export interface WsCallState {
+  callId: string;
+  /** 触发方（对方操作/系统超时时的对方 id） */
+  userId: string;
+}
+
 export interface ServerToClientEvents {
   'connection:welcome': (payload: {
     socketId: string;
@@ -404,6 +440,18 @@ export interface ServerToClientEvents {
   'presence:update': (payload: WsPresenceState) => void;
   'friend:request': (payload: WsFriendRequest) => void;
   'friend:accepted': (payload: WsFriendAccepted) => void;
+  /** 来电（仅被叫） */
+  'call:incoming': (payload: WsCallIncoming) => void;
+  /** 对方接受了通话（仅主叫） */
+  'call:accepted': (payload: WsCallState) => void;
+  /** 对方拒接（仅主叫） */
+  'call:rejected': (payload: WsCallState) => void;
+  /** 对方在接通前取消 / 振铃超时未接（仅被叫；reason=missed 为服务端超时） */
+  'call:cancelled': (payload: WsCallState & { reason?: 'cancelled' | 'missed' }) => void;
+  /** 对方挂断（接通后） */
+  'call:ended': (payload: WsCallState) => void;
+  /** WebRTC 信令（SDP offer/answer、ICE candidate），服务端原样转发给通话另一方 */
+  'webrtc:signal': (payload: WsCallState & { data: CallSignal }) => void;
 }
 
 /** Client → Server */
@@ -448,6 +496,27 @@ export interface ClientToServerEvents {
   ) => void;
   'typing:start': (payload: { conversationId: string; displayName?: string }) => void;
   'typing:stop': (payload: { conversationId: string }) => void;
+  /** 发起 1:1 通话（仅好友；对方忙碌 → ack error） */
+  'call:invite': (
+    payload: { targetUserId: string; media: CallMedia },
+    ack: WsAckCallback<{ callId: string; ringTimeoutMs: number }>,
+  ) => void;
+  /** 被叫接听（仅被叫本人、振铃中有效） */
+  'call:accept': (
+    payload: { callId: string },
+    ack: WsAckCallback<{ callId: string }>,
+  ) => void;
+  /** 被叫拒接（振铃中） */
+  'call:reject': (payload: { callId: string; reason?: string }, ack: WsAckCallback<null>) => void;
+  /** 主叫接通前取消 */
+  'call:cancel': (payload: { callId: string }, ack: WsAckCallback<null>) => void;
+  /** 接通后挂断（双方均可） */
+  'call:hangup': (payload: { callId: string }, ack: WsAckCallback<null>) => void;
+  /** WebRTC 信令上行（服务端转发给通话另一方，不做语义解析） */
+  'webrtc:signal': (
+    payload: { callId: string; data: CallSignal },
+    ack: WsAckCallback<null>,
+  ) => void;
   'health:ping': (ack: WsAckCallback<{ pong: number; online: number }>) => void;
 }
 

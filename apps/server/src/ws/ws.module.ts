@@ -2,6 +2,7 @@ import { DynamicModule, Global, Module } from '@nestjs/common';
 import { EventsGateway } from './events.gateway.js';
 import { WsEventsService } from './ws-events.service.js';
 import { SessionsModule } from '../sessions/sessions.module.js';
+import { CallModule } from '../call/call.module.js';
 import { TransportModule } from '../transport/transport.module.js';
 import { TransportBridgeService } from '../transport/transport-bridge.service.js';
 import { resolveTransportSettings } from '../transport/config.js';
@@ -27,7 +28,7 @@ export class WsModule {
       return {
         global: true,
         module: WsModule,
-        imports: [SessionsModule, TransportModule],
+        imports: [SessionsModule, TransportModule, CallModule],
         providers: [{ provide: WsEventsService, useExisting: TransportBridgeService }],
         exports: [WsEventsService],
       };
@@ -35,7 +36,7 @@ export class WsModule {
     return {
       global: true,
       module: WsModule,
-      imports: [SessionsModule],
+      imports: [SessionsModule, CallModule],
       providers: [WsEventsService, EventsGateway],
       exports: [WsEventsService],
     };

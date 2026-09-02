@@ -13,6 +13,7 @@
   import { serverTimeToMs as pgTimeToMs } from "$lib/api/sessions";
   import { groupsApi } from "$lib/api/groups";
   import { uploadToQiniu, isUploadCanceled } from "$lib/upload/qiniu";
+  import { call } from "$lib/webrtc/call-store.svelte";
 
   // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
   import Clock from "@lucide/svelte/icons/clock";
@@ -31,6 +32,8 @@
   import Paperclip from "@lucide/svelte/icons/paperclip";
   import Send from "@lucide/svelte/icons/send";
   import MessageSquare from "@lucide/svelte/icons/message-square";
+  import PhoneIcon from "@lucide/svelte/icons/phone";
+  import VideoIcon from "@lucide/svelte/icons/video";
 
   let draft = $state("");
   let chatEl: HTMLDivElement | undefined = $state();
@@ -413,6 +416,27 @@
         </div>
         {#if chat.error}
           <span class="ml-auto text-xs text-red-500">{chat.error}</span>
+        {/if}
+        {#if !isGroup && chat.current.peer}
+          <!-- 音视频通话（1:1，WebRTC P2P） -->
+          <div class="ml-auto flex items-center gap-1">
+            <button
+              class="rounded-full p-2 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)] disabled:opacity-40"
+              title="语音通话"
+              disabled={call.active}
+              onclick={() => void call.start(chat.current!.peer!, "audio")}
+            >
+              <PhoneIcon size={18} />
+            </button>
+            <button
+              class="rounded-full p-2 text-[var(--p-muted-fg)] transition-colors hover:bg-[var(--p-muted)] hover:text-[var(--p-fg)] disabled:opacity-40"
+              title="视频通话"
+              disabled={call.active}
+              onclick={() => void call.start(chat.current!.peer!, "video")}
+            >
+              <VideoIcon size={18} />
+            </button>
+          </div>
         {/if}
         {#if isGroup}
           <button

@@ -373,6 +373,14 @@ class SocketManager {
     await this.impl.rpc<void>('message:read', { conversationId });
   }
 
+  /**
+   * 通用 RPC（ack → Promise）：音视频通话信令等新增 C2S 事件走这里，
+   * 无需在门面逐个包一层。失败（ok=false / 超时 / 未连接）reject Error。
+   */
+  async rawRpc<T>(type: string, payload?: unknown): Promise<T> {
+    return this.requireImpl().rpc<T>(type, payload);
+  }
+
   // typing 是协议保留位（D2 确认无调用方）：socket 实现照发，WT 实现静默跳过
   typingStart(conversationId: string, displayName?: string): void {
     (this.impl as SocketIoTransport | null)?.typingStart?.(conversationId, displayName);

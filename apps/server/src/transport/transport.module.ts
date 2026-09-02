@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { SessionsModule } from '../sessions/sessions.module.js';
+import { CallModule } from '../call/call.module.js';
 import { InternalPresenceController } from './internal-presence.controller.js';
 import { InternalRtController } from './internal-rt.controller.js';
 import { TransportController } from './transport.controller.js';
@@ -21,7 +22,7 @@ import { TransportCertService } from './transport-cert.service.js';
  *  - wt            → useExisting: TransportBridgeService（HTTP 桥）
  */
 @Module({
-  imports: [SessionsModule],
+  imports: [SessionsModule, CallModule],
   controllers: [InternalRtController, InternalPresenceController, TransportController],
   providers: [PresenceMirrorService, TransportCertService, TransportBridgeService],
   exports: [PresenceMirrorService, TransportCertService, TransportBridgeService],
