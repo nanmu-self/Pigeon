@@ -1,14 +1,26 @@
 //! 聊天记录相关 Tauri commands — 薄封装：参数校验 + 错误转换，
 //! SQL 逻辑在 `chat.rs`（可单测）。
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::chat;
-use crate::db::Db;
+use crate::db::{self, Db};
 use crate::models::*;
 
-fn lock<'a>(state: &'a State<Db>) -> Result<std::sync::MutexGuard<'a, rusqlite::Connection>, String> {
-    state.0.lock().map_err(|e| format!("数据库锁获取失败: {e}"))
+/// 登录后调用：打开（或复用）当前用户的本地库 pigeon-{userId}.db
+#[tauri::command]
+pub fn open_user_db(app: AppHandle, state: State<Db>, user_id: String) -> Result<(), String> {
+    let user_id = user_id.trim();
+    if user_id.is_empty() {
+        return Err("user_id 不能为空".into());
+    }
+    db::open_for_user(&state, &app, user_id).map_err(|e| format!("打开本地数据库失败: {e}"))
+}
+
+/// 登出时调用：关闭当前用户的本地库（幂等）
+#[tauri::command]
+pub fn close_user_db(state: State<Db>) -> Result<(), String> {
+    db::close(&state)
 }
 
 // ── 会话 ─────────────────────────────────────────────────────
@@ -16,7 +28,7 @@ fn lock<'a>(state: &'a State<Db>) -> Result<std::sync::MutexGuard<'a, rusqlite::
 /// 会话列表（含最新消息预览与未读数）
 #[tauri::command]
 pub fn list_conversations(state: State<Db>) -> Result<Vec<ConversationSummary>, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::list_conversations(&conn).map_err(|e| e.to_string())
 }
 
@@ -35,28 +47,28 @@ pub fn create_conversation(
     if kind != KIND_DIRECT && kind != KIND_GROUP {
         return Err(format!("非法会话类型: {kind}"));
     }
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::create_conversation(&conn, name, kind).map_err(|e| e.to_string())
 }
 
 /// 标记会话已读
 #[tauri::command]
 pub fn mark_conversation_read(state: State<Db>, conversation_id: i64) -> Result<(), String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::mark_conversation_read(&conn, conversation_id).map_err(|e| e.to_string())
 }
 
 /// 删除会话（聊天记录随 CASCADE 一并删除）
 #[tauri::command]
 pub fn delete_conversation(state: State<Db>, conversation_id: i64) -> Result<(), String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::delete_conversation(&conn, conversation_id).map_err(|e| e.to_string())
 }
 
 /// 清空会话聊天记录（保留会话本身）
 #[tauri::command]
 pub fn clear_history(state: State<Db>, conversation_id: i64) -> Result<(), String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::clear_history(&conn, conversation_id).map_err(|e| e.to_string())
 }
 
@@ -71,7 +83,7 @@ pub fn get_messages(
     before_created_at: Option<i64>,
     before_id: Option<i64>,
 ) -> Result<Vec<ChatMessage>, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::get_messages(&conn, conversation_id, limit, before_created_at, before_id)
         .map_err(|e| e.to_string())
 }
@@ -84,7 +96,7 @@ pub fn ensure_conversation(
     peer_id: String,
     peer_name: String,
 ) -> Result<Conversation, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::ensure_conversation(&conn, &server_session_id, &peer_id, &peer_name)
         .map_err(|e| e.to_string())
 }
@@ -121,7 +133,7 @@ pub fn insert_message(
         status: status.unwrap_or_else(|| STATUS_SENT.to_string()),
     };
 
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::insert_message(&conn, msg).map_err(|e| e.to_string())
 }
 
@@ -163,7 +175,7 @@ pub fn send_message(
         status: STATUS_SENDING.to_string(),
     };
 
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::insert_message(&conn, msg).map_err(|e| e.to_string())
 }
 
@@ -174,7 +186,7 @@ pub fn ensure_group_conversation(
     server_session_id: String,
     group_name: String,
 ) -> Result<Conversation, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::ensure_group_conversation(&conn, &server_session_id, &group_name).map_err(|e| e.to_string())
 }
 
@@ -184,7 +196,7 @@ pub fn upsert_server_message(
     state: State<Db>,
     message: ServerMessage,
 ) -> Result<MergeResult, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::upsert_server_message(&conn, &message).map_err(|e| e.to_string())
 }
 
@@ -196,7 +208,7 @@ pub fn acknowledge_message(
     server_msg_id: String,
     created_at: i64,
 ) -> Result<ChatMessage, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::acknowledge_message(&conn, &client_msg_id, &server_msg_id, created_at)
         .map_err(|e| e.to_string())
 }
@@ -204,21 +216,21 @@ pub fn acknowledge_message(
 /// 标记发送失败
 #[tauri::command]
 pub fn mark_message_failed(state: State<Db>, client_msg_id: String) -> Result<(), String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::mark_message_failed(&conn, &client_msg_id).map_err(|e| e.to_string())
 }
 
 /// 重试失败的消息：status 置回 sending（随后走正常 ack 回填流程）
 #[tauri::command]
 pub fn retry_message(state: State<Db>, client_msg_id: String) -> Result<(), String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::retry_message(&conn, &client_msg_id).map_err(|e| e.to_string())
 }
 
 /// 本地应用撤回（按服务端消息 id，幂等）：清空内容/meta + 打撤回标记
 #[tauri::command]
 pub fn apply_recalled(state: State<Db>, server_msg_id: String) -> Result<bool, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::apply_recalled(&conn, &server_msg_id).map_err(|e| e.to_string())
 }
 
@@ -230,7 +242,7 @@ pub fn set_peer_watermarks(
     read_up_to: Option<i64>,
     delivered_up_to: Option<i64>,
 ) -> Result<(), String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::set_peer_watermarks(&conn, conversation_id, read_up_to, delivered_up_to)
         .map_err(|e| e.to_string())
 }
@@ -238,7 +250,7 @@ pub fn set_peer_watermarks(
 /// 删除单条消息
 #[tauri::command]
 pub fn delete_message(state: State<Db>, message_id: i64) -> Result<(), String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::delete_message(&conn, message_id).map_err(|e| e.to_string())
 }
 
@@ -250,6 +262,6 @@ pub fn search_messages(
     query: String,
     limit: Option<i64>,
 ) -> Result<Vec<ChatMessage>, String> {
-    let conn = lock(&state)?;
+    let conn = db::lock(&state)?;
     chat::search_messages(&conn, conversation_id, &query, limit).map_err(|e| e.to_string())
 }

@@ -4,6 +4,30 @@
  */
 import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import type { MessageReactionSummary } from '@pigeon/shared-types';
+import { profile } from './api/profile.svelte';
+import { tokenStore } from './api/http';
+
+/**
+ * 本地库按登录用户拆分（多账号隔离）：首次 chat 调用前自动打开
+ * pigeon-{userId}.db；未登录时不打开（命令侧 fail-fast 提示重新登录）。
+ */
+let opening: Promise<void> | null = null;
+let openedFor: string | null = null;
+
+async function ensureDbOpen(): Promise<void> {
+  // 直接刷进登录后页面时，profile 可能尚未拉取 —— 先兑底加载
+  if (!profile.user && tokenStore.get()) await profile.load();
+  const userId = profile.user ? String(profile.user.id) : null;
+  if (!userId || openedFor === userId) return;
+  opening ??= tauriInvoke<void>("open_user_db", { userId })
+    .then(() => {
+      openedFor = userId;
+    })
+    .finally(() => {
+      opening = null;
+    });
+  await opening;
+}
 
 /**
  * 本地库调用统一入口：把「旧 Rust 后端 + 新前端」的结构不匹配错误
@@ -11,6 +35,7 @@ import type { MessageReactionSummary } from '@pigeon/shared-types';
  * 而不是让 `no such column: xxx` 这种 SQLite 原文直接冒到 UI。
  */
 async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  await ensureDbOpen();
   try {
     return await tauriInvoke<T>(cmd, args);
   } catch (e) {
@@ -110,6 +135,21 @@ export interface ChatMessage {
 }
 
 export const chatApi = {
+  /** 登录后可显式预热本地库（后续调用也会自动触发，见 ensureDbOpen） */
+  openUserDb: (userId: number | string) =>
+    tauriInvoke<void>("open_user_db", { userId: String(userId) }).then(() => {
+      openedFor = String(userId);
+    }),
+
+  /** 登出时调用：关闭当前用户的本地库并重置自动打开状态 */
+  closeUserDb: async () => {
+    try {
+      await tauriInvoke<void>("close_user_db");
+    } finally {
+      openedFor = null;
+    }
+  },
+
   listConversations: () =>
     invoke<ConversationSummary[]>("list_conversations"),
 

@@ -85,7 +85,7 @@ export class ChatStore {
     return ws.userId;
   }
 
-  /** 登出时清空全部内存态（本地 SQLite 历史保留，同账号重登后仍可读） */
+  /** 登出时清空全部内存态；本地 SQLite 按账号分库（pigeon-{userId}.db），同账号重登后历史仍可读 */
   reset(): void {
     this.sessions = [];
     this.sessionsLoading = false;

@@ -4,8 +4,6 @@ mod db;
 mod models;
 mod webview;
 
-use std::sync::Mutex;
-
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -19,11 +17,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
-            // 启动时打开 SQLite 并执行迁移，挂到全局 state
-            let conn = db::init(app.handle())
-                .map_err(|e| format!("初始化本地数据库失败: {e}"))?;
-            app.manage(db::Db(Mutex::new(conn)));
+        // 本地库按登录用户打开/关闭（见 db.rs 顶部注释）：启动时只挂空状态，
+        // 登录成功后由 open_user_db 命令打开 pigeon-{userId}.db
+        .setup(|_app| {
+            _app.manage(db::Db(
+                std::sync::Mutex::new(None),
+                std::sync::Mutex::new(String::new()),
+            ));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -45,6 +45,8 @@ pub fn run() {
             commands::retry_message,
             commands::apply_recalled,
             commands::set_peer_watermarks,
+            commands::open_user_db,
+            commands::close_user_db,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
