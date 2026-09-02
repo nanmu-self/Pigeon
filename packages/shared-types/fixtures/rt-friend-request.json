@@ -1,0 +1,10 @@
+{
+  "from": {
+    "id": 2,
+    "email": "bob@pigeon.local",
+    "nickname": "Bob",
+    "avatarUrl": "https://cdn.example.com/avatar/2.png",
+    "createdAt": "2026-01-01T00:00:00.000Z"
+  },
+  "createdAt": "2026-01-01T08:00:00.000Z"
+}

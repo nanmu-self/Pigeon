@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "type": "hello",
+  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIiwidXNlcklkIjoxfQ.sig",
+  "clientProto": 1,
+  "clientVersion": "desktop-0.1.0"
+}

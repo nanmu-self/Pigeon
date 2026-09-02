@@ -461,3 +461,76 @@ export interface SocketData {
   /** Unix 毫秒时间戳 */
   connectedAt: number;
 }
+
+// ─────────────────────────────────────────────────────────────
+// 实时传输层（Rust WebTransport 网关 + Socket.IO 双轨）契约
+//
+// 帧格式统一为 `u32 BE 长度 + JSON(UTF-8)`（单帧上限 1 MiB），由
+// Rust `apps/transport-server/src/proto.rs` 与桌面端
+// `apps/desktop/src/lib/transport/frame.ts` 两侧实现；
+// packages/shared-types/fixtures/rt-*.json 是防漂移夹具（Nest 单测
+// 断言序列化一致、Rust 单测断言反序列化一致）。
+// ─────────────────────────────────────────────────────────────
+
+/** 传输实现：wt = Rust WebTransport（QUIC），socket = Socket.IO（旧路径） */
+export type TransportKind = 'wt' | 'socket';
+
+/**
+ * GET /transport/config 响应（JwtAuthGuard）。
+ * 客户端每次（重）连之前都必须重新获取，禁止长缓存 ——
+ * 证书轮换窗口期指纹会变，缓存旧指纹会导致新连接握手失败。
+ */
+export interface TransportConfig {
+  transport: TransportKind;
+  /** WebTransport URL（transport=wt 时有效），形如 https://host:4433/wt */
+  url: string;
+  /** 自签证书 SHA-256 指纹（base64，DER 摘要；轮换窗口期新旧并存） */
+  certSha256: string[];
+  /** 最低客户端协议版本，低于则客户端提示强制升级而非重连 */
+  minClientProto: number;
+}
+
+/** 事件名 → 其首个（载荷）参数类型（避免手抄载荷） */
+export type EventPayload<K extends keyof ServerToClientEvents> = Parameters<
+  ServerToClientEvents[K]
+>[0];
+
+/** 客户端协议版本（hello.clientProto / TransportConfig.minClientProto） */
+export const RT_CLIENT_PROTO = 1 as const;
+
+/** C2S RPC 请求帧（客户端开的 bi 流，每请求一条） */
+export interface RtRequest {
+  /** 客户端自增 id，服务端原样回填 */
+  id: number;
+  type: keyof ClientToServerEvents;
+  payload?: unknown;
+}
+
+/** C2S RPC 响应帧（服务端回完即关流） */
+export type RtResponse =
+  | { id: number; ok: true; data: unknown }
+  | { id: number; ok: false; error: string; code?: 'unauthorized' };
+
+/** S2C 推送帧（服务端开的单向长流；seq 按连接单调递增，跳号 → 客户端全量对账） */
+export type RtPushFrame =
+  | { seq: number; type: keyof ServerToClientEvents; payload: unknown }
+  | { seq: number; type: 'resync' | 'going_away'; payload: { reason: string } };
+
+/** hello 帧（连接建立后客户端在 bi 流 #0 发出的第一帧，5s 内） */
+export interface RtHello {
+  v: 1;
+  type: 'hello';
+  token: string;
+  clientProto: number;
+  clientVersion: string;
+}
+
+/** hello 响应：welcome（等价旧 connection:welcome）或 error（随后服务端关连接） */
+export type RtHelloResult =
+  | { type: 'welcome'; connId: string; userId: string; serverTime: number }
+  | {
+      type: 'error';
+      code: 'auth_failed' | 'client_too_old' | 'token_expired';
+      message?: string;
+      minProto?: number;
+    };

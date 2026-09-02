@@ -1,0 +1,11 @@
+{
+  "id": "1024",
+  "conversationId": "7",
+  "senderId": "1",
+  "senderName": "Alice",
+  "kind": "text",
+  "content": "你好，鸽子！",
+  "meta": null,
+  "replyTo": null,
+  "createdAt": 1735689600000
+}
