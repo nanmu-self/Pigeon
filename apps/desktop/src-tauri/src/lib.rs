@@ -2,6 +2,7 @@ mod chat;
 mod commands;
 mod db;
 mod models;
+mod webview;
 
 use std::sync::Mutex;
 
@@ -9,6 +10,13 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 创建任何窗口前先检查 WebView2 运行时（Windows）：缺失或版本过低时弹窗提示并退出，
+    // 避免老内核渲染白屏/异常。门槛见 webview::MIN_WEBVIEW2_VERSION。
+    if let Err(message) = webview::enforce_minimum_version() {
+        webview::show_error_dialog(&message);
+        std::process::exit(1);
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {

@@ -25,3 +25,7 @@ serde_json = "1"
 # 本地聊天记录持久化（bundled: 自带 SQLite 源码编译，免系统依赖）
 rusqlite = { version = "0.37", features = ["bundled"] }
 
+[target."cfg(windows)".dependencies]
+# WebView2 版本门槛的原生错误弹窗（MessageBoxW），仅 Windows 目标编译
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+
