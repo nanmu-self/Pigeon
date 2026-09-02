@@ -1,30 +1,28 @@
-# Pigeon 后端（NestJS）— 在 VPS 上由 GitHub Actions 驱动，1Panel 只负责看容器/反代
+# Pigeon 后端 — GitHub Actions 构建镜像推 GHCR，VPS 只拉取和运行（2G 内存友好）
+#
+# 镜像（由 .github/workflows/deploy.yml 的 build-push job 发布）：
+#   ghcr.io/nanmu-self/pigeon-server:<sha>        运行镜像（Dockerfile runtime 阶段）
+#   ghcr.io/nanmu-self/pigeon-server:latest       运行镜像（随每次部署滚动）
+#   ghcr.io/nanmu-self/pigeon-server:build-<sha>  迁移镜像（build 阶段，含 prisma CLI 与迁移文件）
+#
+# IMAGE_TAG 由 deploy.yml 注入（commit sha）；VPS 手动操作时不设则用 latest。
 #
 # 常用命令（VPS 上）：
-#   数据库迁移（一次性任务容器）：docker compose -f deploy/docker-compose.yml --profile tools run --rm migrate
-#   启动/更新服务：              docker compose -f deploy/docker-compose.yml up -d --build server
-#   看日志：                     docker logs -f pigeon-server
-#
-# 网络说明：加入 1Panel 的应用网络后，DATABASE_URL 的主机名直接写
-# Postgres 的容器名（1Panel「容器」页里看，形如 1Panel-postgres-xxxx），
-# 无需把 5432 端口映射出来。
+#   更新到最新：  docker compose -f deploy/docker-compose.yml pull server
+#                docker compose -f deploy/docker-compose.yml up -d server
+#   回滚到指定版本（仅应用代码；数据库迁移不支持自动回退）：
+#                IMAGE_TAG=<旧sha> docker compose -f deploy/docker-compose.yml up -d server
 services:
-  # 一次性迁移任务：复用 build 阶段镜像（含 prisma CLI 与迁移文件）
+  # 一次性迁移任务：用构建镜像（含 prisma CLI），跑完即销毁
   migrate:
     profiles: ["tools"] # 不随 up 启动，仅 --profile tools run 时执行
-    build:
-      context: ..
-      dockerfile: apps/server/Dockerfile
-      target: build
+    image: ghcr.io/nanmu-self/pigeon-server:build-${IMAGE_TAG:-latest}
     command: pnpm --filter @pigeon/server db:update
     env_file: /opt/pigeon/shared/env
     networks: [pigeon]
 
   server:
-    build:
-      context: ..
-      dockerfile: apps/server/Dockerfile
-      target: runtime
+    image: ghcr.io/nanmu-self/pigeon-server:${IMAGE_TAG:-latest}
     container_name: pigeon-server
     env_file: /opt/pigeon/shared/env
     # 只绑本机回环：外网流量一律走 1Panel 的 OpenResty 反代 + HTTPS

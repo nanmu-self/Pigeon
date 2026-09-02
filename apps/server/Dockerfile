@@ -1,15 +1,20 @@
-# 构建上下文 = 仓库根目录（见 deploy/docker-compose.yml 的 build.context）
-# 多阶段：build（全量依赖+源码，同时作为迁移任务容器）/ runtime（仅生产依赖+dist）
+# 构建上下文 = 仓库根目录（见 deploy/docker-compose.yml）
+# 多阶段：build（全量依赖+源码，作为迁移镜像发布）/ runtime（仅生产依赖+dist，运行镜像）
+#
+# 镜像由 GitHub Actions 构建并推送到 GHCR（见 .github/workflows/deploy.yml），
+# VPS 不再本地构建 —— pnpm install / nest build 的内存大户不在服务器上。
 
 # ── 构建阶段 ─────────────────────────────────────────────
 FROM node:24-slim AS build
+# npm 源可覆盖：默认官方源（构建在 GitHub Actions 上最快）；
+# 若在 VPS 上手动构建，传 --build-arg NPM_REGISTRY=https://registry.npmmirror.com
+ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /app
 RUN npm i -g pnpm@11
 
-# pnpm 调优：store 固定目录（配合下方 cache mount 持久化，lockfile 变了也不重下）；
-# 低并发 + 多重试，对不稳定的 npm registry 更稳
+# pnpm 调优：store 固定目录（配合下方 cache mount）；低并发+多重试抗 registry 抖动
 ENV npm_config_store_dir=/pnpm/store \
-    npm_config_registry=https://registry.npmmirror.com \
+    npm_config_registry=${NPM_REGISTRY} \
     npm_config_network_concurrency=4 \
     npm_config_fetch_retries=6 \
     npm_config_fetch_retry_mintimeout=10000 \
@@ -30,10 +35,11 @@ RUN pnpm --filter @pigeon/server build
 
 # ── 运行阶段 ─────────────────────────────────────────────
 FROM node:24-slim AS runtime
+ARG NPM_REGISTRY=https://registry.npmjs.org
 WORKDIR /app
 ENV NODE_ENV=production \
     npm_config_store_dir=/pnpm/store \
-    npm_config_registry=https://registry.npmmirror.com \
+    npm_config_registry=${NPM_REGISTRY} \
     npm_config_network_concurrency=4 \
     npm_config_fetch_retries=6 \
     npm_config_fetch_retry_mintimeout=10000 \
