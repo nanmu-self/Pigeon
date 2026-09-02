@@ -1,10 +1,10 @@
 # Pigeon 后端 — GitHub Actions 构建镜像推 GHCR，VPS 只拉取和运行（2G 内存友好）
 #
 # 镜像（由 .github/workflows/deploy.yml 的 build-push job 发布，单镜像双角色）：
-# VPS 拉取走 NJU 镜像源（ghcr.nju.edu.cn，匿名公共缓存）——前提：GHCR 包必须设为 Public！
+# VPS 拉取走 NJU 镜像源（ghcr.linkos.org，匿名公共缓存）——前提：GHCR 包必须设为 Public！
 # 若包改回 Private 或镜像源抽风，把下面两处前缀换回 ghcr.io 即可（私有拉取走 PAT 登录）。
-#   ghcr.nju.edu.cn/nanmu-self/pigeon-server:<sha>      服务 + 迁移共用（内含 prisma CLI）
-#   ghcr.nju.edu.cn/nanmu-self/pigeon-server:latest     随每次部署滚动
+#   ghcr.linkos.org/nanmu-self/pigeon-server:<sha>      服务 + 迁移共用（内含 prisma CLI）
+#   ghcr.linkos.org/nanmu-self/pigeon-server:latest     随每次部署滚动
 #
 # IMAGE_TAG 由 deploy.yml 注入（commit sha）；VPS 手动操作时不设则用 latest。
 #
@@ -17,13 +17,13 @@ services:
   # 一次性迁移任务：与服务同一镜像（内含 prisma CLI / 契约 / 迁移文件），跑完即销毁
   migrate:
     profiles: ["tools"] # 不随 up 启动，仅 --profile tools run 时执行
-    image: ghcr.nju.edu.cn/nanmu-self/pigeon-server:${IMAGE_TAG:-latest}
+    image: ghcr.linkos.org/nanmu-self/pigeon-server:${IMAGE_TAG:-latest}
     command: pnpm --filter @pigeon/server db:update
     env_file: /opt/pigeon/shared/env
     networks: [pigeon]
 
   server:
-    image: ghcr.nju.edu.cn/nanmu-self/pigeon-server:${IMAGE_TAG:-latest}
+    image: ghcr.linkos.org/nanmu-self/pigeon-server:${IMAGE_TAG:-latest}
     container_name: pigeon-server
     env_file: /opt/pigeon/shared/env
     # 只绑本机回环：外网流量一律走 1Panel 的 OpenResty 反代 + HTTPS
