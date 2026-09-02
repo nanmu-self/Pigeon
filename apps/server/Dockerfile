@@ -56,6 +56,12 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm/store \
 
 COPY --from=build /app/apps/server/dist apps/server/dist
 
+# 迁移所需（同一镜像兼作迁移器，见 compose 的 migrate 服务）：
+# prisma CLI 已随 prod 依赖进镜像，这里补上配置、契约与迁移文件
+COPY apps/server/prisma.config.ts apps/server/
+COPY apps/server/src/prisma apps/server/src/prisma
+COPY apps/server/migrations apps/server/migrations
+
 EXPOSE 3048
 WORKDIR /app/apps/server
 CMD ["node", "dist/main.js"]

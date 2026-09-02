@@ -39,7 +39,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: 构建并推送运行镜像（runtime）
+      - name: 构建并推送镜像（runtime；内含 prisma CLI，服务/迁移共用）
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -49,17 +49,6 @@ jobs:
           tags: |
             ${{ env.IMAGE }}:${{ github.sha }}
             ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: 构建并推送迁移镜像（build 阶段，含 prisma CLI）
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: apps/server/Dockerfile
-          target: build
-          push: true
-          tags: ${{ env.IMAGE }}:build-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -74,7 +63,7 @@ jobs:
           host: ${{ secrets.PIGEON_SSH_HOST }}
           username: ${{ secrets.PIGEON_SSH_USER }}
           key: ${{ secrets.PIGEON_SSH_KEY }}
-          command_timeout: 30m
+          command_timeout: 90m # 首次拉镜像最耗时（后续只拉增量层）；VPS 到 GHCR blob 的吞吐有限
           script_stop: true # 任一步骤失败立即中断
           script: |
             export IMAGE_TAG=${{ github.sha }}
