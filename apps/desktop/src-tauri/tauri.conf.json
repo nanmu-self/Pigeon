@@ -14,8 +14,7 @@
       {
         "title": "desktop",
         "width": 800,
-        "height": 600,
-        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --unsafely-treat-insecure-origin-as-secure=http://tauri.localhost"
+        "height": 600
       }
     ],
     "security": {
@@ -25,6 +24,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "macOS": {
+      "infoPlist": {
+        "NSCameraUsageDescription": "Pigeon 需要使用摄像头进行视频通话",
+        "NSMicrophoneUsageDescription": "Pigeon 需要使用麦克风进行语音/视频通话"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
