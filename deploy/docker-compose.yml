@@ -5,6 +5,7 @@
 # 若包改回 Private 或镜像源抽风，把下面两处前缀换回 ghcr.io 即可（私有拉取走 PAT 登录）。
 #   ghcr.nju.edu.cn/nanmu-self/pigeon-server:<sha>      服务 + 迁移共用（内含 prisma CLI）
 #   ghcr.nju.edu.cn/nanmu-self/pigeon-server:latest     随每次部署滚动
+#   ghcr.nju.edu.cn/nanmu-self/pigeon-transport:<sha>   Rust 实时传输网关（WebTransport/QUIC）
 #
 # IMAGE_TAG 由 deploy.yml 注入（commit sha）；VPS 手动操作时不设则用 latest。
 #
@@ -20,6 +21,33 @@ services:
     image: ghcr.nju.edu.cn/nanmu-self/pigeon-server:${IMAGE_TAG:-latest}
     command: pnpm --filter @pigeon/server db:update
     env_file: /opt/pigeon/shared/env
+    networks: [pigeon]
+
+  # ── Rust 实时传输网关（WebTransport/QUIC，见 docs/webtransport-migration-plan.md）──
+  # ⚠️ 不可 scale/replicas > 1：连接注册表在进程内存，加副本 = 一半用户收不到推送（决策 D8）
+  transport:
+    image: ghcr.nju.edu.cn/nanmu-self/pigeon-transport:${IMAGE_TAG:-latest}
+    # 用固定 container_name 做容器间 host 名（1panel-network 是 external 共享网络，
+    # 靠 compose 服务名解析不稳）—— Nest 的 TRANSPORT_INTERNAL_URL 指向它
+    container_name: pigeon-transport
+    env_file: /opt/pigeon/shared/env
+    environment:
+      NEST_URL: http://pigeon-server:3048
+      WT_BIND: 0.0.0.0:4433
+      WT_INTERNAL_BIND: 0.0.0.0:3901
+    ports:
+      # 只映射 UDP 4433（QUIC 直连，OpenResty 不透传 QUIC/UDP）；
+      # 3901 不映射 —— internal HTTP 仅容器网内可达（§6.5）
+      - "0.0.0.0:4433:4433/udp"
+    stop_grace_period: 10s # 配合优雅关闭（SIGTERM → going_away 广播 → ≤3s 退出）
+    restart: unless-stopped
+    healthcheck:
+      # slim 镜像无 curl/node，用二进制自带 --selfcheck
+      test: ["CMD", "/usr/local/bin/transport-server", "--selfcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks: [pigeon]
 
   server:

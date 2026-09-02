@@ -26,6 +26,8 @@ jobs:
       # e2e 会连真实 Postgres 建用户/发消息（dotenv 不会覆盖已有环境变量）
       DATABASE_URL: postgresql://pigeon:pigeon@localhost:5432/pigeon
       JWT_SECRET: ci-only-secret
+      # e2e 打 /internal/rt/*（C2S 与传输实现解耦，D7）
+      WT_INTERNAL_TOKEN: e2e-internal-token-0123456789abcdef
     steps:
       - uses: actions/checkout@v4
 
@@ -55,3 +57,25 @@ jobs:
 
       - name: 构建验证
         run: pnpm --filter @pigeon/server build
+
+      # 桌面端：类型检查 + 帧编解码单测（WS/WebTransport 双实现的公共面）
+      - name: 桌面端类型检查与单测
+        run: |
+          pnpm --filter @pigeon/desktop check
+          pnpm --filter @pigeon/desktop test
+
+  # Rust 实时传输网关：单测（proto/帧/证书/registry/auth）+ 回环 QUIC 集成测试
+  transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 缓存 cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/transport-server
+
+      - name: 测试（单元 + 回环集成）
+        run: cargo test -p transport-server
