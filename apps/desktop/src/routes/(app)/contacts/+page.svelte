@@ -6,6 +6,13 @@
   import { usersApi } from "$lib/api/users";
   import { ws } from "$lib/api/socket.svelte";
   import { showToast } from "$lib/toast";
+
+  // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
+  import UserPlus from "@lucide/svelte/icons/user-plus";
+  import MessageSquare from "@lucide/svelte/icons/message-square";
+  import Ban from "@lucide/svelte/icons/ban";
+  import Trash2 from "@lucide/svelte/icons/trash-2";
+  import Search from "@lucide/svelte/icons/search";
   import type {
     FriendItem,
     FriendRequestItem,
@@ -25,6 +32,16 @@
   let searching = $state(false);
   /** 已发起申请的用户（本地标记，避免重复点击） */
   const requestedIds = $state(new Set<number>());
+  /** 进行中的好友操作（userId/requestId → add/accept/decline），请求期间禁用按钮防连点 */
+  const pendingOps = $state(new Set<string>());
+  function isPending(op: string, id: number) {
+    return pendingOps.has(`${op}:${id}`);
+  }
+  function setPending(op: string, id: number, on: boolean) {
+    const key = `${op}:${id}`;
+    if (on) pendingOps.add(key);
+    else pendingOps.delete(key);
+  }
 
   /** 选中的好友（右栏资料卡） */
   let selected = $state<FriendItem | null>(null);
@@ -116,6 +133,8 @@
   }
 
   async function sendRequest(userId: number) {
+    if (requestedIds.has(userId) || isPending("add", userId)) return;
+    setPending("add", userId, true);
     try {
       await friendsApi.sendRequest(userId);
       requestedIds.add(userId);
@@ -124,6 +143,8 @@
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e));
       void refresh();
+    } finally {
+      setPending("add", userId, false);
     }
   }
 
@@ -143,21 +164,29 @@
   // ── 申请处理 ─────────────────────────────────────────────
 
   async function accept(requestId: number) {
+    if (isPending("accept", requestId)) return;
+    setPending("accept", requestId, true);
     try {
       await friendsApi.accept(requestId);
       showToast("已添加好友", { type: "success" });
       await refresh();
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending("accept", requestId, false);
     }
   }
 
   async function decline(requestId: number) {
+    if (isPending("decline", requestId)) return;
+    setPending("decline", requestId, true);
     try {
       await friendsApi.decline(requestId);
       await refresh();
     } catch (e) {
       showToast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending("decline", requestId, false);
     }
   }
 
@@ -230,7 +259,7 @@
           if (groupPanelOpen) void chat.loadFriends();
         }}
       >
-        <svg class="h-4.5 w-4.5 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+        <UserPlus size={18} class="text-[var(--p-muted-fg)]" />
       </button>
     </div>
 
@@ -291,11 +320,13 @@
                 <p class="truncate text-xs text-[var(--p-muted-fg)]">{r.user.email}</p>
               </div>
               <button
-                class="rounded-md bg-[var(--p-primary)] px-2.5 py-1 text-xs font-medium text-[var(--p-primary-fg)]"
+                class="rounded-md bg-[var(--p-primary)] px-2.5 py-1 text-xs font-medium text-[var(--p-primary-fg)] transition-opacity disabled:opacity-50"
+                disabled={isPending("accept", r.id)}
                 onclick={() => void accept(r.id)}
               >通过</button>
               <button
-                class="rounded-md border border-[var(--p-border)] px-2.5 py-1 text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)]"
+                class="rounded-md border border-[var(--p-border)] px-2.5 py-1 text-xs text-[var(--p-muted-fg)] hover:text-[var(--p-fg)] transition-opacity disabled:opacity-50"
+                disabled={isPending("decline", r.id)}
                 onclick={() => void decline(r.id)}
               >拒绝</button>
             </div>
@@ -391,7 +422,7 @@
             class="flex w-full items-center gap-3 rounded-lg border border-[var(--p-border)] bg-[var(--p-card)] px-4 py-3 text-sm text-[var(--p-fg)] transition-colors hover:bg-[var(--p-muted)]"
             onclick={() => void startChat(selected!.user.id)}
           >
-            <svg class="h-4.5 w-4.5 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <MessageSquare size={18} class="text-[var(--p-muted-fg)]" />
             发消息
           </button>
           <button
@@ -403,14 +434,14 @@
             }}
             title="拉黑后对方无法向你发起会话与申请"
           >
-            <svg class="h-4.5 w-4.5 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>
+            <Ban size={18} class="text-[var(--p-muted-fg)]" />
             拉黑
           </button>
           <button
             class="flex w-full items-center gap-3 rounded-lg border border-red-200 bg-[var(--p-card)] px-4 py-3 text-sm text-red-500 transition-colors hover:bg-red-50 dark:border-red-900/50 dark:hover:bg-red-900/20"
             onclick={() => void removeFriend(selected!.user.id, selected!.user.nickname)}
           >
-            <svg class="h-4.5 w-4.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            <Trash2 size={18} />
             删除好友
           </button>
         </div>
@@ -422,7 +453,7 @@
         <p class="mb-4 text-sm text-[var(--p-muted-fg)]">按邮箱精确搜索，或按昵称模糊搜索</p>
 
         <div class="relative">
-          <svg class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--p-muted-fg)]" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <Search size={16} class="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--p-muted-fg)]" />
           <input
             type="text"
             bind:value={searchQuery}
@@ -448,7 +479,8 @@
                 </div>
                 {#if st.action === "add"}
                   <button
-                    class="rounded-md bg-[var(--p-primary)] px-3 py-1.5 text-xs font-medium text-[var(--p-primary-fg)]"
+                    class="rounded-md bg-[var(--p-primary)] px-3 py-1.5 text-xs font-medium text-[var(--p-primary-fg)] transition-opacity disabled:opacity-50"
+                    disabled={isPending("add", user.id)}
                     onclick={() => void sendRequest(user.id)}
                   >{st.label}</button>
                 {:else if st.action === "chat"}
