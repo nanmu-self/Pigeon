@@ -8,6 +8,7 @@ import { FriendsModule } from './friends/friends.module.js';
 import { GroupsModule } from './groups/groups.module.js';
 import { SessionsModule } from './sessions/sessions.module.js';
 import { StorageModule } from './storage/storage.module.js';
+import { TransportModule } from './transport/transport.module.js';
 import { UsersModule } from './users/users.module.js';
 import { WsModule } from './ws/ws.module.js';
 
@@ -18,8 +19,11 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     PrismaModule,
     // 注册 / 登录(JWT 签发)
     AuthModule,
-    // Socket.IO 实时通道（Tauri 前端直连）
-    WsModule,
+    // Socket.IO 实时通道（Tauri 前端直连；RT_TRANSPORT=wt 时桥接到 Rust 传输服务）
+    WsModule.register(),
+    // 实时传输层：/internal/rt/*、/internal/presence/delta、/transport/config
+    // + presence 镜像 + TransportBridgeService（WS 桥的 wt 实现）
+    TransportModule,
     // 七牛云 Kodo 直传取票（后端签凭证，前端 qiniu-js 直传）
     StorageModule,
     // 用户资料（GET/PATCH /users/me，JWT 鉴权）

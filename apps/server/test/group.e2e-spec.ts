@@ -1,11 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
-import { io, type Socket } from 'socket.io-client';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { CaptchaService } from '../src/auth/captcha.service.js';
 import { PrismaService } from '../src/prisma.service.js';
+import { WsEventsService } from '../src/ws/ws-events.service.js';
+import { FakeTransportBridge, INTERNAL_TOKEN, rtAck } from './helpers/transport.js';
 import type {
   AuthResult,
   FriendRequestItem,
@@ -26,7 +27,7 @@ import type {
 const CAPTCHA_CODE = '0000';
 let api: ReturnType<typeof request>;
 let prisma: PrismaService;
-let httpPort = 0;
+let bridge: FakeTransportBridge;
 
 async function register(nickname: string): Promise<AuthResult> {
   const email = `${nickname}-${Date.now()}-${Math.floor(Math.random() * 1e6)}@e2e.test`;
@@ -41,51 +42,13 @@ async function register(nickname: string): Promise<AuthResult> {
   return response.body as AuthResult;
 }
 
-async function connectWs(token: string): Promise<Socket> {
-  const socket = io(`http://localhost:${httpPort}`, {
-    auth: { token },
-    transports: ['websocket'],
-  });
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('ws connect timeout')), 5000);
-    socket.on('connect', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    socket.on('connect_error', (err: Error) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
-  return socket;
-}
-
-function waitFor<T>(socket: Socket, event: string, timeoutMs = 5000): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`timeout waiting ${event}`)), timeoutMs);
-    socket.once(event, (payload: T) => {
-      clearTimeout(timer);
-      resolve(payload);
-    });
-  });
-}
-
-function emitAck<T>(
-  socket: Socket,
-  event: string,
-  payload: unknown,
-): Promise<{ ok: boolean; data?: T; error?: string }> {
-  return new Promise((resolve) => {
-    socket.emit(event, payload, (res: { ok: boolean; data?: T; error?: string }) => resolve(res));
-  });
-}
-
 let alice: AuthResult;
 let bob: AuthResult;
 let charlie: AuthResult;
 
 describe('群聊链路 (e2e)', () => {
   beforeAll(async () => {
+    process.env.WT_INTERNAL_TOKEN = INTERNAL_TOKEN;
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })
@@ -94,20 +57,26 @@ describe('群聊链路 (e2e)', () => {
         issue: () => ({ captchaId: 'test-captcha-id', image: 'data:image/png;base64,' }),
         verify: (_id: string, code: string) => code === CAPTCHA_CODE,
       })
+      .overrideProvider(WsEventsService)
+      .useValue(new FakeTransportBridge())
       .compile();
 
     const app = moduleFixture.createNestApplication();
     app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }));
     app.enableShutdownHooks();
     await app.listen(0);
-    httpPort = (app.getHttpServer().address() as { port: number }).port;
     api = request(app.getHttpServer());
     prisma = app.get(PrismaService);
+    bridge = app.get(WsEventsService) as unknown as FakeTransportBridge;
 
     alice = await register('Alice');
     bob = await register('Bob');
     charlie = await register('Charlie');
   }, 30_000);
+
+  beforeEach(() => {
+    bridge.reset();
+  });
 
   afterAll(async () => {
     // 统一收集三个用户关联的全部会话（单聊 + 群聊），先删数据后删用户
@@ -179,10 +148,15 @@ describe('群聊链路 (e2e)', () => {
     // 因此改用「拉一个陌生账号」验证：直接不存在该用户场景已由 404 覆盖，跳过。
 
     // ── 群消息：alice 发，bob 实时收到；@提及携带 ──
-    const socketAlice = await connectWs(alice.token);
-    const socketBob = await connectWs(bob.token);
-    const bobGot = waitFor<WsChatMessage>(socketBob, 'message:new');
-    const sent = await emitAck<WsChatMessage>(socketAlice, 'message:send', {
+    bridge.setOnline(alice.user.id, true);
+    bridge.setOnline(bob.user.id, true);
+    // 清空调用记录：等价旧测试「新连接只收未来的事件」语义（建群 system 消息不再干扰匹配）
+    bridge.clearCalls();
+    const bobGot = bridge.waitFor<WsChatMessage>({
+      userId: bob.user.id,
+      type: 'message:new',
+    });
+    const sent = await rtAck<WsChatMessage>(api, alice, 'message:send', {
       conversationId: groupId,
       content: '大家好',
       mentions: [String(bob.user.id)],
@@ -200,13 +174,13 @@ describe('群聊链路 (e2e)', () => {
 
     // ── 全员禁言：成员发消息被拒；关闭后恢复 ──
     await api.put(`/groups/${groupId}/mute`).auth(alice.token, { type: 'bearer' }).send({ muteAll: true });
-    const muted = await emitAck<WsChatMessage>(socketBob, 'message:send', {
+    const muted = await rtAck<WsChatMessage>(api, bob, 'message:send', {
       conversationId: groupId,
       content: '禁言中',
     });
     expect(muted.ok).toBe(false);
     await api.put(`/groups/${groupId}/mute`).auth(alice.token, { type: 'bearer' }).send({ muteAll: false });
-    const unmuted = await emitAck<WsChatMessage>(socketBob, 'message:send', {
+    const unmuted = await rtAck<WsChatMessage>(api, bob, 'message:send', {
       conversationId: groupId,
       content: '禁言解除了',
       clientMsgId: 'e2e-g-2',
@@ -271,8 +245,5 @@ describe('群聊链路 (e2e)', () => {
     expect(systemTexts.some((t) => t.includes('成为了群主'))).toBe(true);
     expect(systemTexts.some((t) => t.includes('被移出了群聊'))).toBe(true);
     expect(systemTexts.some((t) => t.includes('退出了群聊'))).toBe(true);
-
-    await socketAlice.disconnect();
-    await socketBob.disconnect();
   }, 30_000);
 });

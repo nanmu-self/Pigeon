@@ -95,6 +95,22 @@ export class WsEventsService {
     this.emitRaw(this.io?.to(`user:${userId}`), event, payload);
   }
 
+  /**
+   * 批量定向推给多个用户的全部在线设备。
+   *
+   * 与 TransportBridgeService 同签名（群 fan-out 用批量；Socket.IO 侧本就
+   * 是内存循环，不涉及多次 HTTP）。与 toUser 一样保持 fire-and-forget 语义。
+   */
+  toUsers<K extends keyof ServerToClientEvents>(
+    userIds: string[],
+    event: K,
+    payload: ServerEventPayload<K>,
+  ): void {
+    for (const userId of userIds) {
+      this.emitRaw(this.io?.to(`user:${userId}`), event, payload);
+    }
+  }
+
   /** 推给某个会话房间（`conversation:{conversationId}`） */
   toConversation<K extends keyof ServerToClientEvents>(
     conversationId: string,

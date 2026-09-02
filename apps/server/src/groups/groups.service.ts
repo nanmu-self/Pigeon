@@ -120,9 +120,8 @@ export class GroupsService {
     });
 
     const chatMessage = toChatMessage(message, '');
-    for (const uid of await this.memberIds(sessionId)) {
-      this.ws.toUser(String(uid), 'message:new', chatMessage);
-    }
+    // 批量 fan-out：一次内部调用（toUsers）取代 N 次 toUser（§5 群 fan-out 批量化）
+    this.ws.toUsers((await this.memberIds(sessionId)).map(String), 'message:new', chatMessage);
   }
 
   private broadcastGroupUpdated(conversationId: string): void {

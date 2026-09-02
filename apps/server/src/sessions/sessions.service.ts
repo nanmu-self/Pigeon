@@ -350,14 +350,12 @@ export class SessionsService {
     });
 
     // 推送：单聊推对端 + 自己其他设备；群聊推全部成员（发送者的其他设备
-    // 也靠这里同步，客户端按消息 id 去重）
+    // 也靠这里同步，客户端按消息 id 去重）。批量合并成单次 toUsers 调用。
     if (session.kind === 'group') {
-      for (const uid of memberIds!) {
-        this.ws.toUser(String(uid), 'message:new', chatMessage);
-      }
+      this.ws.toUsers(memberIds!.map(String), 'message:new', chatMessage);
     } else {
-      if (message.peerId !== null) this.ws.toUser(String(message.peerId), 'message:new', chatMessage);
-      this.ws.toUser(String(senderId), 'message:new', chatMessage);
+      const targets = [String(senderId), ...(message.peerId !== null ? [String(message.peerId)] : [])];
+      this.ws.toUsers(targets, 'message:new', chatMessage);
     }
 
     // 已送达 → 给发送方推送达回执（仅单聊；群聊送达口径为全员，MVP 不推）
@@ -523,7 +521,7 @@ export class SessionsService {
     userId: number,
     action: 'add' | 'remove',
   ): void {
-    // 需要通知双方（发送方 + 操作者的其他设备）：userA/userB 两个个人房间
+    // 需要通知双方（发送方 + 操作者的其他设备）：单次 toUsers 批量调用
     void this.sessionRow(conversationId).then((session) => {
       if (!session) return;
       const payload = {
@@ -533,8 +531,7 @@ export class SessionsService {
         userId: String(userId),
         action,
       };
-      this.ws.toUser(String(session.userAId), 'reaction:update', payload);
-      this.ws.toUser(String(session.userBId), 'reaction:update', payload);
+      this.ws.toUsers([String(session.userAId), String(session.userBId)], 'reaction:update', payload);
     });
   }
 
@@ -566,7 +563,7 @@ export class SessionsService {
       });
     });
 
-    // 双方广播撤回通知
+    // 双方广播撤回通知（单次 toUsers 批量调用）
     const session = await this.sessionRow(message.sessionId);
     if (session) {
       const payload = {
@@ -575,8 +572,7 @@ export class SessionsService {
         userId: String(userId),
         recalledAt: pgTimestampToMs(recalledAt),
       };
-      this.ws.toUser(String(session.userAId), 'message:recalled', payload);
-      this.ws.toUser(String(session.userBId), 'message:recalled', payload);
+      this.ws.toUsers([String(session.userAId), String(session.userBId)], 'message:recalled', payload);
     }
   }
 
