@@ -1,6 +1,12 @@
 <script lang="ts">
   import { cn } from "$lib/utils";
 
+  // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
+  import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
+  import CircleCheckBig from "@lucide/svelte/icons/circle-check-big";
+  import Info from "@lucide/svelte/icons/info";
+  import X from "@lucide/svelte/icons/x";
+
   interface Props {
     message: string;
     type?: "error" | "success" | "info";
@@ -25,13 +31,14 @@
   };
 
   const icons = {
-    error: `<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>`,
-    success: `<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>`,
-    info: `<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>`,
+    error: TriangleAlert,
+    success: CircleCheckBig,
+    info: Info,
   };
 </script>
 
 {#if message}
+  {@const Icon = icons[type]}
   <div
     role="alert"
     class={cn(
@@ -39,9 +46,7 @@
       variants[type]
     )}
   >
-    <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-      {@html icons[type]}
-    </svg>
+    <Icon size={16} class="shrink-0" />
     <span class="text-sm font-medium">{message}</span>
     {#if onClose}
       <button
@@ -50,9 +55,7 @@
         aria-label="关闭"
         class="ml-1 flex h-5 w-5 shrink-0 items-center justify-center rounded opacity-60 hover:opacity-100 transition-fast"
       >
-        <svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
-        </svg>
+        <X size={12} strokeWidth={3} />
       </button>
     {/if}
   </div>

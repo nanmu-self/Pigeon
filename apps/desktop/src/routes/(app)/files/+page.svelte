@@ -16,6 +16,10 @@
   } from "$lib/upload/qiniu";
   import type { UploadDir } from "@pigeon/shared-types";
 
+  // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
+  import Upload from "@lucide/svelte/icons/upload";
+  import X from "@lucide/svelte/icons/x";
+
   type ItemStatus = "uploading" | "done" | "error" | "canceled";
 
   interface Item {
@@ -211,19 +215,7 @@
           : "border-[var(--p-border)] bg-[var(--p-card)] hover:border-[var(--p-muted-fg)]",
       )}
     >
-      <svg
-        class="h-8 w-8 text-[var(--p-muted-fg)]"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="1.5"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-        <polyline points="17 8 12 3 7 8" />
-        <line x1="12" y1="3" x2="12" y2="15" />
-      </svg>
+      <Upload size={32} strokeWidth={1.5} class="text-[var(--p-muted-fg)]" />
       <p class="text-sm text-[var(--p-fg)]">点击选择文件，或拖拽到此处</p>
       <p class="text-xs text-[var(--p-muted-fg)]">
         目标目录：{DIRS.find((d) => d.value === dir)?.label}
@@ -333,9 +325,7 @@
                   aria-label="移除记录"
                   class="rounded p-1.5 text-[var(--p-muted-fg)] transition-fast hover:bg-[var(--p-muted)] hover:text-red-500"
                 >
-                  <svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
+                  <X size={14} />
                 </button>
               </div>
             </div>

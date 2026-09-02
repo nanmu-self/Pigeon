@@ -17,11 +17,15 @@
   import { profile } from "$lib/api/profile.svelte";
   import { ws } from "$lib/api/socket.svelte";
   import { chat } from "$lib/chat-store.svelte";
+  import { chatApi } from "$lib/chat";
   import {
     isUploadCanceled,
     uploadToQiniu,
     type UploadHandle,
   } from "$lib/upload/qiniu";
+
+  // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
+  import Camera from "@lucide/svelte/icons/camera";
 
   // 与服务端 avatar 目录限制一致（见 apps/server/src/storage/qiniu.service.ts DIR_LIMITS）
   const AVATAR_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
@@ -147,7 +151,8 @@
       ws.disconnect(); // 主动断开 WS（handler 注册表保留，重登后 connect 自动重绑）
       tokenStore.clear(); // 清除登录凭据（localStorage + sessionStorage）
       profile.set(null); // 清空全局用户资料
-      chat.reset(); // 清空聊天内存态（本地 SQLite 历史保留）
+      chat.reset(); // 清空聊天内存态
+      await chatApi.closeUserDb(); // 关闭当前用户的本地库（换号后自动打开新账号的库）
       showToast("已退出登录", { type: "success" });
       await goto("/", { replaceState: true });
     } finally {
@@ -218,10 +223,7 @@
                   <div
                     class="absolute inset-0 hidden items-center justify-center bg-black/40 text-white group-hover:flex"
                   >
-                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z" />
-                      <circle cx="12" cy="13" r="4" />
-                    </svg>
+                    <Camera size={20} />
                   </div>
                 {/if}
               </button>

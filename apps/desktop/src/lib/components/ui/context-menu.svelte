@@ -9,7 +9,8 @@
   interface MenuItem {
     id: string;
     label: string;
-    icon?: string;
+    /** Lucide 图标组件（如 `import Trash2 from "@lucide/svelte/icons/trash-2"`） */
+    icon?: import("svelte").Component;
     disabled?: boolean;
     danger?: boolean;
     separator?: boolean;
@@ -95,9 +96,8 @@
           )}
         >
           {#if item.icon}
-            <svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              {@html item.icon}
-            </svg>
+            {@const Icon = item.icon}
+            <Icon size={16} class="shrink-0" />
           {/if}
           <span class="flex-1">{item.label}</span>
         </button>

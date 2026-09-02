@@ -9,6 +9,10 @@
   import { authApi } from "$lib/api/auth";
   import { profile } from "$lib/api/profile.svelte";
 
+  // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
+  import Mail from "@lucide/svelte/icons/mail";
+  import LoaderCircle from "@lucide/svelte/icons/loader-circle";
+
   type Mode = "login" | "register";
 
   let mode = $state<Mode>("login");
@@ -77,6 +81,8 @@
       rememberEmailStore.set(rememberMe ? email.trim().toLowerCase() : "");
       // 登录结果里已含用户资料，直接写入全局状态（省一次 GET /users/me）
       profile.set(result.user);
+      // 预热该账号的本地库 pigeon-{userId}.db（后续 chat 调用也会自动触发）
+      void import("$lib/chat").then(({ chatApi }) => chatApi.openUserDb(result.user.id).catch(() => {}));
 
       showToast(isLogin ? "登录成功" : "注册成功", { type: "success" });
       setTimeout(() => goto("/messages"), 500);
@@ -100,10 +106,7 @@
     <!-- Logo -->
     <div class="mb-6 text-center">
       <div class="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-md bg-[var(--p-primary)] text-[var(--p-primary-fg)]">
-        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/>
-          <polyline points="22,6 12,13 2,6"/>
-        </svg>
+        <Mail size={20} />
       </div>
       <h1 class="text-lg font-semibold text-[var(--p-fg)]">Pigeon</h1>
       <p class="mt-0.5 text-xs text-[var(--p-muted-fg)]">开源高性能即时通讯</p>
@@ -192,10 +195,7 @@
 
         <Button type="submit" class="w-full h-9 text-sm" disabled={isLoading}>
           {#if isLoading}
-            <svg class="mr-2 h-3.5 w-3.5 animate-spin" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" fill="none"/>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-            </svg>
+            <LoaderCircle size={14} strokeWidth={2.5} class="mr-2 animate-spin" />
             {isLogin ? "登录中…" : "注册中…"}
           {:else}
             {isLogin ? "登录" : "注册"}
