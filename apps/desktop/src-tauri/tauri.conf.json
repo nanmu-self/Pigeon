@@ -15,7 +15,7 @@
         "title": "desktop",
         "width": 800,
         "height": 600,
-        "useHttpsScheme": true
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --unsafely-treat-insecure-origin-as-secure=http://tauri.localhost"
       }
     ],
     "security": {
