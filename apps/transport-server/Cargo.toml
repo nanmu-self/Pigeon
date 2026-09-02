@@ -1,0 +1,42 @@
+[package]
+name = "transport-server"
+version = "0.1.0"
+edition = "2021"
+description = "Pigeon 实时传输网关：WebTransport(QUIC) 终结 + 连接注册表 + 定向投递（业务逻辑在 NestJS）"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "transport-server"
+path = "src/main.rs"
+
+[dependencies]
+# QUIC/WebTransport 终结（0.12 内部处理 ALPN，无需手配）
+web-transport-quinn = { version = "0.12", default-features = false, features = ["ring"] }
+# 传输参数（keepalive/流上限/收发窗口）需要直接配 quinn —— 版本必须与
+# web-transport-quinn 依赖的 quinn 0.11 统一（cargo 会自动合并）
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal", "io-util"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# JWT 验签（HS256，与 Nest 共用 JWT_SECRET）
+jsonwebtoken = "9"
+# 自签证书（ECDSA P-256，配合 serverCertificateHashes 指纹固定）
+rcgen = "0.14"
+time = { version = "0.3", default-features = false, features = ["std"] }
+sha2 = "0.10"
+base64 = "0.22"
+# Nest 内部 HTTP 调用（/internal/rt/*）+ 自身 internal HTTP 服务
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# rustls 显式选 ring provider（避开 aws-lc-rs 对 cmake/nasm 的构建要求）
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dashmap = "6"
+rand = "0.9"
+
+[dev-dependencies]
+tempfile = "3"
+bytes = "1"
+url = "2"

@@ -109,3 +109,4 @@ vite.config.ts.timestamp-*
 # ============================================
 .codegraph/
 .mcp.json
+apps/transport-server/.env

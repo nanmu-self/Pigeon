@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "concurrently -n DESKTOP,SERVER -c blue,green \"pnpm dev:desktop\" \"pnpm dev:server\"",
+    "dev": "concurrently -n DESKTOP,SERVER,TRANSPORT -c blue,green,magenta \"pnpm dev:desktop\" \"pnpm dev:server\" \"pnpm dev:transport\"",
     "dev:desktop": "pnpm --filter @pigeon/desktop tauri dev",
     "dev:server": "pnpm --filter @pigeon/server start:dev",
+    "dev:transport": "cargo run -p transport-server",
     "tauri": "pnpm --filter @pigeon/desktop tauri",
     "build": "pnpm --filter @pigeon/desktop build && pnpm --filter @pigeon/server build",
     "check:types": "pnpm --filter @pigeon/desktop check && pnpm --filter @pigeon/server build",

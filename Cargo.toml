@@ -3,5 +3,6 @@ resolver = "2"
 members = [
   "crates/*",
   "apps/desktop/src-tauri",
+  "apps/transport-server",
 ]
 exclude = ["apps/*/node_modules"]
