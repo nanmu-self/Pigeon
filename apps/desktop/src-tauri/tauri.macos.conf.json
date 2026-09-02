@@ -9,5 +9,13 @@
         "useHttpsScheme": true
       }
     ]
+  },
+  "bundle": {
+    "macOS": {
+      "infoPlist": {
+        "NSCameraUsageDescription": "Pigeon 需要使用摄像头进行视频通话",
+        "NSMicrophoneUsageDescription": "Pigeon 需要使用麦克风进行语音/视频通话"
+      }
+    }
   }
 }
