@@ -9,6 +9,7 @@ RUN npm i -g pnpm@11
 # pnpm 调优：store 固定目录（配合下方 cache mount 持久化，lockfile 变了也不重下）；
 # 低并发 + 多重试，对不稳定的 npm registry 更稳
 ENV npm_config_store_dir=/pnpm/store \
+    npm_config_registry=https://registry.npmmirror.com \
     npm_config_network_concurrency=4 \
     npm_config_fetch_retries=6 \
     npm_config_fetch_retry_mintimeout=10000 \
@@ -32,6 +33,7 @@ FROM node:24-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     npm_config_store_dir=/pnpm/store \
+    npm_config_registry=https://registry.npmmirror.com \
     npm_config_network_concurrency=4 \
     npm_config_fetch_retries=6 \
     npm_config_fetch_retry_mintimeout=10000 \
