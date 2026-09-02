@@ -70,6 +70,14 @@ class CallStore {
     this.media = media;
     this.peer = { id: String(peer.id), name: peer.nickname, ...(peer.avatarUrl ? { avatarUrl: peer.avatarUrl } : {}) };
     this.status = 'outgoing';
+    try {
+      // 呼叫前先取媒体：权限/设备问题在振铃前暴露，避免接通后一方崩溃另一方干等
+      await this.setupLocal();
+    } catch (error) {
+      this.cleanup();
+      showToast(mediaErrorText(error));
+      return;
+    }
     this.armRingGuard();
     try {
       const res = await ws.rawRpc<{ callId: string; ringTimeoutMs: number }>('call:invite', {
@@ -95,8 +103,8 @@ class CallStore {
       await this.setupLocal();
       this.setupPeer();
     } catch (error) {
-      showToast(error instanceof Error ? error.message : '接听失败');
-      void this.hangup();
+      showToast(mediaErrorText(error));
+      await this.hangup();
     }
   }
 
@@ -114,14 +122,18 @@ class CallStore {
 
   // ── 双方通用 ─────────────────────────────────────────────
 
-  /** 挂断/取消（振铃中主叫侧 = 取消，服务端自动映射语义） */
+  /**
+   * 挂断/取消。统一发 call:hangup —— 服务端按自己记录的状态映射：
+   * 振铃中主叫挂断 → 对端收 cancelled；其余 → 对端收 ended。
+   * （不能由客户端猜状态发 call:cancel：接通后 cancel 会被服务端拒绝，
+   * 通话条目残留 → 双方都「正在通话中」死锁。）
+   */
   async hangup(): Promise<void> {
     const { callId } = this;
-    const wasActive = this.status === 'connected';
     this.cleanup();
     if (!callId) return;
     try {
-      await ws.rawRpc(wasActive ? 'call:hangup' : 'call:cancel', { callId });
+      await ws.rawRpc('call:hangup', { callId });
     } catch {
       /* 通话可能已被服务端清理 */
     }
@@ -154,15 +166,12 @@ class CallStore {
       if (this.direction !== 'out' || !this.callId) return;
       this.disarmRingGuard();
       this.status = 'connecting';
-      void this.setupLocal()
-        .then(() => {
-          this.setupPeer();
-          return this.createAndSendOffer();
-        })
-        .catch((error) => {
-          showToast(error instanceof Error ? error.message : '通话建立失败');
-          void this.hangup();
-        });
+      // 媒体已在 start() 取好；这里只建 PC + 发 offer
+      this.setupPeer();
+      this.createAndSendOffer().catch((error) => {
+        showToast(error instanceof Error ? error.message : '通话建立失败');
+        void this.hangup();
+      });
     });
 
     ws.on('call:rejected', () => {
@@ -193,6 +202,9 @@ class CallStore {
   // ── WebRTC 内部 ──────────────────────────────────────────
 
   private async setupLocal(): Promise<void> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('当前环境不支持音视频采集（需要 HTTPS/Tauri 安全上下文）');
+    }
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: true,
       video: this.media === 'video' ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
@@ -318,3 +330,18 @@ class CallStore {
 }
 
 export const call = new CallStore();
+
+/** getUserMedia 错误 → 可读提示（权限拒绝是最常见原因） */
+function mediaErrorText(error: unknown): string {
+  const name = (error as { name?: string })?.name;
+  if (name === 'NotAllowedError' || name === 'SecurityError') {
+    return '无法访问摄像头/麦克风：请在系统与 WebView2 权限设置中允许后重试';
+  }
+  if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+    return '未找到可用的摄像头/麦克风设备';
+  }
+  if (name === 'NotReadableError') {
+    return '摄像头/麦克风被其它应用占用';
+  }
+  return error instanceof Error ? error.message : '音视频采集失败';
+}
