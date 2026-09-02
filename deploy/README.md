@@ -58,15 +58,16 @@ sudo -u pigeon ssh-keygen -t ed25519 -f /home/pigeon/.ssh/id_ed25519 -N ""
 sudo -u pigeon git clone git@github.com:nanmu-self/Pigeon.git /opt/pigeon/repo
 ```
 
-### 5. GHCR 登录（拉私有镜像用，一次性）
+### 5. GHCR 镜像包设为 Public（VPS 走 NJU 镜像源拉取的前提）
 
-GitHub → Settings → Developer settings → **Personal access tokens**（勾 `read:packages`）→ 在 VPS 上（以部署用户身份）：
+VPS 拉`镜像走 ghcr.nju.edu.cn（匿名公共缓存，国内直连快），只能代理**公开**镜像：
 
-```bash
-sudo -u pigeon sh -c 'echo <PAT> | docker login ghcr.io -u nanmu-self --password-stdin'
-```
+GitHub → 仓库右侧 Packages → pigeon-server → Package settings → Change visibility → Public
 
-> PAT 过期后部署会在 pull 步骤报 `unauthorized`，重新生成并再执行一次即可。
+> 评估：镜像内只有编译产物与依赖，无任何凭据（配置全部运行时注入）。
+> 若不想公开包：改回 ghcr.io 前缀，改用 dockerd 代理拉取（见对话记录），且无需本步骤。
+> 设置后无需 docker login / PAT —— 匿名拉取。
+> 小坑：镜像源是回源缓存，推送新镜像后立刻拉可能报 manifest unknown，等几分钟重试。
 
 ### 6. GitHub Secrets（仓库 Settings → Secrets and variables → Actions）
 
