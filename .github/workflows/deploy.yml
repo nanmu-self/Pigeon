@@ -28,6 +28,7 @@ jobs:
           host: ${{ secrets.PIGEON_SSH_HOST }}
           username: ${{ secrets.PIGEON_SSH_USER }}
           key: ${{ secrets.PIGEON_SSH_KEY }}
+          command_timeout: 30m # VPS 网络慢，首次构建/大依赖变更需要更久
           script_stop: true # 任一步骤失败立即中断
           script: |
             cd /opt/pigeon/repo
