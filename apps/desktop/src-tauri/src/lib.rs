@@ -19,6 +19,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         // 本地库按登录用户打开/关闭（见 db.rs 顶部注释）：启动时只挂空状态，
         // 登录成功后由 open_user_db 命令打开 pigeon-{userId}.db
         // 点击窗口关闭按钮时不直接退出：CloseRequested 被 on_window_event 拦截后

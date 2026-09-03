@@ -27,6 +27,7 @@ import type {
   WsReadReceipt,
   WsRecalledNotice,
 } from '@pigeon/shared-types';
+import { messageBodyPreview, notifyMessage, windowVisible } from '$lib/notify';
 import {
   chatApi,
   parseReactions,
@@ -596,9 +597,22 @@ export class ChatStore {
       }
       // 会话正开着 → 立即回执已读
       await this.markCurrentRead();
-    } else if (mentionsMe) {
-      // 会话未打开 → 特殊通知（红点之外再弹提示）
-      showToast(`「${session.kind === 'group' ? session.name : session.peer?.nickname}」中提到了你`);
+    } else {
+      // 会话未打开或窗口在后台 → 系统通知（点击唤回主窗口）
+      // 自己在其他设备的消息不提醒；当前会话开着且窗口前台也不打扰
+      if (!isSelf && (this.current?.id !== m.conversationId || !windowVisible())) {
+        const title =
+          session.kind === 'group'
+            ? `${session.name ?? '群聊'} · ${m.senderName ?? '成员'}`
+            : (session.peer?.nickname ?? '新消息');
+        void notifyMessage(title, messageBodyPreview(m.kind, m.content, m.meta));
+      }
+      if (mentionsMe) {
+        // 会话未打开 → 特殊通知（红点之外再弹应用内提示）
+        showToast(
+          `「${session.kind === 'group' ? session.name : session.peer?.nickname}」中提到了你`,
+        );
+      }
     }
     // 刷新列表（未读数/预览/排序）
     void this.loadSessions();
