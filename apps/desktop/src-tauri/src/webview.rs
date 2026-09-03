@@ -5,19 +5,23 @@
 //! 老内核缺少现代 CSS/JS 特性会导致界面渲染异常。因此在创建任何窗口前先检查版本，
 //! 不达标弹原生错误框并退出。
 //!
-//! - 调整门槛：改 [`MIN_WEBVIEW2_VERSION`]
+//! - 调整门槛：改 `MIN_WEBVIEW2_VERSION`（该常量与比较逻辑仅在 Windows / `cfg(test)` 下编译，
+//!   否则 macOS/Linux 会报 dead_code 警告）
 //! - 临时验证失败路径：环境变量 `PIGEON_MIN_WEBVIEW2` 覆盖门槛（如设为 `999.0.0.0` 必弹窗）
 
 /// 最低要求的 WebView2 运行时版本（4 段式版本号，逐段数值比较）。
 ///
 /// 桌面前端依赖 Tailwind 4（需要 Chromium ≥ 111）、SvelteKit 等现代特性，
 /// 120（2023-12 的 Chromium）为稳妥下限，可按需上调。
+#[cfg(any(target_os = "windows", test))]
 pub const MIN_WEBVIEW2_VERSION: &str = "120.0.0.0";
 
 /// WebView2 官方下载页（弹窗中可一键打开）
+#[cfg(any(target_os = "windows", test))]
 const WEBVIEW2_DOWNLOAD_URL: &str = "https://developer.microsoft.com/microsoft-edge/webview2/";
 
 /// 解析 `131.0.2903.99` 形式的版本号为数值段；非数字段（如 `1-dev` 后缀）按 0。
+#[cfg(any(target_os = "windows", test))]
 fn parse_version(version: &str) -> Vec<u64> {
     version
         .split('.')
@@ -26,6 +30,7 @@ fn parse_version(version: &str) -> Vec<u64> {
 }
 
 /// 逐段数值比较：`actual >= min` 才算达标；任一方缺失的段按 0，相等视为达标。
+#[cfg(any(target_os = "windows", test))]
 fn is_at_least(actual: &str, min: &str) -> bool {
     let (a, m) = (parse_version(actual), parse_version(min));
     for i in 0..m.len().max(a.len()) {
