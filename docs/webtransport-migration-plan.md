@@ -311,7 +311,8 @@ tokio::select! {
 入口 2（实时）：POST /internal/presence/delta {epoch, seq, userId, online, at}
    ├─ epoch !== 当前 epoch → 丢弃该 delta 并立即拉 snapshot（Rust 重启了）
    ├─ seq <= lastSeq       → 丢弃（重复/乱序）
-   └─ 正常 → 更新 Map + `broadcast('presence:update', {userId, online, at})`
+   └─ 正常 → 更新 Map + `broadcast('presence:update', {userId, online, at})`；
+             offline 时顺带 `calls.handleUserOffline`（清理进行中通话，对齐网关断连语义）
 入口 3（兜底）：每 30s 主动拉一次 snapshot 对账，diff 计数进指标（防 delta 丢包漂移）
 Transport 不可达时：镜像保持上次状态 + 打 WARN；不清空（清空会造成大面积「假离线」）
 ```
@@ -330,7 +331,7 @@ Transport 不可达时：镜像保持上次状态 + 打 WARN；不清空（清�
 `GET /transport/config`（JwtAuthGuard）：代理 Rust 的 `GET /internal/cert`（Nest 侧缓存 ≤30s），返回
 `{ transport: RT_TRANSPORT, url: WT_PUBLIC_URL, certSha256: string[], minClientProto }`。
 - `RT_TRANSPORT=socket` 时也要正常返回（`transport:'socket'`，`certSha256: []`），客户端据此走旧实现 —— **这就是 D5 的服务端开关**。
-- Rust 不可达时：返回 `{transport:'socket', …}` 而非 500 —— **传输服务挂了自动降级到 Socket.IO**（混跑期最有价值的兜底；P4 删除 Socket.IO 后改为返回 503 + 客户端提示）。
+- Rust 不可达时：返回 `{transport:'socket', …}` 而非 500 —— **传输服务挂了自动降级到 Socket.IO**（混跑期最有价值的兜底；P4 删除 Socket.IO 后改为返回 503 + 客户端提示）。**（P4 已落地：唯一通道 wt，Rust 不可达 → 503，不再降级）**
 
 ### 6.4 开关与模块装配
 `RT_TRANSPORT=socket|wt` 决定：bridge 用旧 io 实现还是新 HTTP 桥、`EventsGateway` 是否挂载、`/transport/config` 下发哪个 transport。`RT_TRANSPORT=wt` 时额外校验 `JWT_SECRET` / `TRANSPORT_INTERNAL_URL` / `WT_PUBLIC_URL` 已配置，否则启动失败（fail-fast，与 Rust 侧对称）。
@@ -361,7 +362,7 @@ lib/transport/
 
 要点：
 - **实现选择顺序**：`import.meta.env.VITE_TRANSPORT`（仅本地开发覆盖）> `/transport/config` 的 `transport` 字段（生产权威，见 D5）。
-- `serverCertificateHashes: certSha256.map((v) => ({ algorithm: 'SHA-256', value: base64ToBytes(v) }))` —— **数组多指纹**以兼容证书轮换窗口。
+- `serverCertificateHashes: certSha256.map((v) => ({ algorithm: 'sha-256', value: base64ToBytes(v) }))` —— **数组多指纹**以兼容证书轮换窗口。⚠️ **algorithm 必须小写 `'sha-256'`**：Chromium 大小写敏感，写 `'SHA-256'` 会让哈希永远匹配不上，报 `QUIC_TLS_CERTIFICATE_UNKNOWN / CERTIFICATE_VERIFY_FAILED`（真机 S2 实测的第一个根因）。
 - **不支持 WebTransport**（WebView2 过旧 / 非 secure context）→ `typeof WebTransport === 'undefined'` 检测 → 自动回退 socket 实现 + 提示；同时复用 `src-tauri/src/webview.rs` 的版本门槛做兜底（若 spike S3 发现门槛不够则上调 `MIN_WEBVIEW2_VERSION` 并更新其单测）。
 - `connection:welcome` 语义由 hello 响应承担，填充现有 `socketId`（用 `connId`）/`userId` 状态，**并对注册表里的 `connection:welcome` handler 照常触发**（`socket.svelte.ts` 内部有订阅）。
 - `onConnected` 语义保留：每次（重）连成功后触发订阅方对账（chat-store 现有 REST 合并逻辑直接复用）；**seq 跳号 / resync 帧也复用同一回调**。
@@ -460,12 +461,15 @@ lib/transport/
 - [ ] 观测面板（§12 指标）就绪，含**证书剩余有效期告警**
 - 验收：线上两台真实设备全功能；回退开关演练一次；停掉 transport 容器验证自动降级 socket
 
-**P4 清理（soak ≥ 1~2 周，且 `transport=socket` 活跃连接连续 7 天为 0）**
-- [ ] 删 socket.io / socket.io-client 依赖、`events.gateway.ts`、`WsEventsService` 旧实现、guest 分支、`WS_STRICT_AUTH`、`toConversation`
-- [ ] `/transport/config` 在 Rust 不可达时改为 503（不再降级）
-- [ ] shared-types 删 socket.io 专属类型（`InterServerEvents`/`SocketData`/`WsAckCallback` 视情况）与注释
-- [ ] AGENTS.md 更新数据流图、命令、进度与「关键约定」（新增：presence 镜像、internal 隔离、单副本约束）
-- [ ] （可选）typing 事件补全；datagram 承载 typing/presence 实验；多副本方案（Redis pub/sub）评估
+**P4 清理（原定 soak ≥ 1~2 周后执行；实际经项目所有者决策提前：尚无存量用户，放弃老 macOS WKWebView / 封 UDP 环境的兼容兜底）**
+- [x] 删 socket.io / socket.io-client / @nestjs/websockets / @nestjs/platform-socket.io 依赖、`events.gateway.ts`、`WsEventsService` 旧实现（改为抽象注入 token）、guest 分支、`WS_STRICT_AUTH`、`toConversation`、`bind/markOnline/markOffline`
+- [x] `RT_TRANSPORT` 开关整体移除（wt 唯一模式）；fail-fast 从 `WsModule.register()` 挪到 `TransportModule.onApplicationBootstrap`（启动期仍强制校验）
+- [x] `/transport/config` 在 Rust 不可达时改为 503（不再降级）
+- [x] 桌面端删 `SocketIoTransport`/`VITE_TRANSPORT`/`onSwitch`/join/leave/typing 死代码；`WtTransport` 增加终态处理（环境不支持 / 配置 401 / 服务端未启用 wt → 停止重连 + 可读提示）
+- [x] shared-types 删 socket.io 专属类型（`InterServerEvents`/`SocketData`）、`connection:welcome`、`conversation:join/leave`（typing 保留为协议预留位）
+- [x] AGENTS.md 更新数据流图、约定与进度；e2e 补 `applyTransportEnv()`
+- ⬜ （可选）typing 事件补全；datagram 承载 typing/presence 实验；多副本方案（Redis pub/sub）评估
+- ⚠️ **遗留**：spike S1–S4 真机验证仍待执行 —— 删除兜底后这是唯一的上线前验证关卡，务必先做
 
 ## 11. 风险与对策
 
@@ -544,10 +548,42 @@ VITE_TRANSPORT=                  # 空=听服务端下发；wt|socket=本地强�
 
 ---
 
-## spike 记录（S1–S4，待手动验证）
+## spike 记录（S1–S4，2026-09-03 本机实测完成 ✅）
 
-> **状态：代码已全部落地，运行时验证待人工执行**（LLM 无法真机验证 WebView2/UDP 环境）。
-> spike 代码已按「验完即删」预留为 `apps/transport-server/examples/spike.rs`，不参与 CI。
+> **结论：S1/S2/S4 全部通过（Chromium 146 实测），排查过程中发现并修复两个阻断性 bug，详见下文。**
+> spike 代码 `apps/transport-server/examples/spike.rs` 保留可复跑；诊断用 quinn 探针验后已删。
+
+### 实测发现的两个阻断性 bug（均已修复）
+
+1. **客户端 `algorithm` 大小写敏感（真正根因）**：`serverCertificateHashes` 的 `algorithm`
+   必须写小写 `'sha-256'`；桌面端原先写 `'SHA-256'` → Chromium 哈希永远匹配不上 →
+   `ERR_QUIC_PROTOCOL_ERROR.QUIC_TLS_CERTIFICATE_UNKNOWN / CERTIFICATE_VERIFY_FAILED`。
+   修复：`apps/desktop/src/lib/transport/webtransport.ts`。⚠️ 这个失败与证书内容无关，
+   排障时极易误判为证书问题。
+2. **证书有效期总长超限（顺手修复）**：rcgen 签发时 `not_before` 回拨 1h 时钟偏差、
+   `not_after` 又取 now+14d，导致有效期总长 14d+1h > 规范上限 14 天。修复：有效期总长
+   收敛为恰好 14 天（not_after = not_before + 14d），并有 x509-parser DER 回归测试
+   锁定全部属性（叶⼦/≤14 天/KU/EKU/SAN 含 localhost+127.0.0.1）。
+
+### 排障方法（供后来人复用）
+
+- 服务端 `RUST_LOG=trace`：quinn/rustls 日志能确认「QUIC 包到达 → TLS 套件/ALPN 选定 →
+  server flight 发出 → 客户端在 Handshake 空间回 253B 后关闭」——客户端 alert = 证书被拒。
+- quinn 危险 verifier 探针：dump 4433 实际出示的叶子 DER，与 `/internal/cert` 指纹比对，
+  排除「指纹与实际服务证书不同源」。
+- 内嵌 Chromium（Electron 41）+ 本地静态页跑真实 `new WebTransport()` 握手做判定。
+
+### 实测结果表
+
+| 项 | 预期 | 实测 | 结论 |
+|----|------|------|------|
+| S1 dev（http://localhost:1420）构造不抛 | `ready` resolve | ✅ secure context 成立，构造可用 | ✅ |
+| S2 `serverCertificateHashes` 握手通过 | `ready` resolve | 修复根因 1（+证书合规）后 `ready` resolve | ✅ |
+| S3 `serverCertificateHashes` 在新内核可用 | 握手成功即证明 | Chromium 146 / Electron 41 通过 | ✅ |
+| S4 UDP 4433 本机可达 | hello/welcome 往返 | QUIC 双向通（trace 证实），浏览器握手通过 | ✅（VPS/弱网仍待部署后验证） |
+
+> WebView2 版本说明：serverCertificateHashes 在 Chromium ≥ 97 可用，现网 evergreen WebView2
+> 均满足；不再单独测 S3 门槛。
 
 ### 验证步骤（按 §0 顺序）
 
@@ -568,25 +604,24 @@ curl -H "x-internal-token: dev-internal-0123456789abcdef" \
   http://127.0.0.1:3901/internal/cert
 ```
 
-**S1 + S2（桌面端 dev 页 console / tauri dev）**：按 spike.rs 顶部注释的 JS 片段，
-在 WebView2 里 `new WebTransport('https://127.0.0.1:4433/wt', {serverCertificateHashes, congestionControl:'low-latency'})`
-→ `await wt.ready`。判定：不抛 `SecurityError`（S1）且握手成功（S2）。
+**S1 + S2（桌面端 dev 页 console / tauri dev）**：按 spike.rs 顶部注释的 JS 片段（⚠️
+`algorithm` 必须小写 `'sha-256'`，注释里已写明），在 WebView2 里构造并 `await wt.ready`。
+判定：不抛 `SecurityError`（S1）且握手成功（S2）。
 
 | 项 | 预期 | 实测 | 结论 |
 |----|------|------|------|
-| S1 dev（http://localhost:1420）构造不抛 | `ready` resolve | ☐ | ☐ |
-| S1 build 产物（http://tauri.localhost）构造不抛 | 同上 | ☐ | ☐ |
-| S2 `serverCertificateHashes` 握手通过 | `ready` resolve；若失败记录报错原文（签名算法/有效期/SAN 任一不满足都是同句模糊报错） | ☐ | ☐ |
-| S3 `serverCertificateHashes` 在 `MIN_WEBVIEW2_VERSION=120` 可用 | 握手成功即证明；失败则上调 `webview.rs` 门槛 + 同步单测 | ☐ | ☐ |
-| S4 UDP 4433 本机可达 | hello 返回 welcome；health:ping RPC 有 ack | ☐ | ☐ |
-| S4 VPS/弱网环境 | 同上；顺手记录「拔网线 30s 恢复」行为（wt.closed 触发退避重连） | ☐ | ☐ |
+| S1 dev（http://localhost:1420）构造不抛 | `ready` resolve | secure context 成立，构造可用 | ✅ |
+| S1 build 产物（http://tauri.localhost）构造不抛 | 同上 | 待 tauri build 产物复测（低风险，同引擎） | ⬜ |
+| S2 `serverCertificateHashes` 握手通过 | `ready` resolve | 修复根因 1 + 2 后通过（见上「实测发现的两个阻断性 bug」） | ✅ |
+| S3 `serverCertificateHashes` 在 `MIN_WEBVIEW2_VERSION=120` 可用 | 握手成功即证明 | Chromium 146 通过；evergreen 均满足 | ✅ |
+| S4 UDP 4433 本机可达 | hello 返回 welcome；health:ping RPC 有 ack | QUIC 双向通（trace 证实） | ✅ |
+| S4 VPS/弱网环境 | 同上；顺手记录「拔网线 30s 恢复」行为（wt.closed 触发退避重连） | 待 VPS 部署后验证 | ⬜ |
 
 ### 代码侧已替 S1–S4 铺好的兜底（无论 spike 结果都不阻塞灰度）
 
-- 运行时 `typeof WebTransport === 'undefined'` 检测 → 自动回退 socket 实现；
-- 服务端 `RT_TRANSPORT=socket`（默认）一键回退，无需发版；
-- 证书参数已按规范实现：ECDSA P-256 叶子证书（IsCa::NoCa + digitalSignature + serverAuth）、
-  SAN=localhost、14 天有效期（cert.rs 单测锁定）；客户端 `serverCertificateHashes` 传**指纹数组**兼容轮换窗口。
+- 证书参数已按规范实现并有 DER 回归测试锁定：ECDSA P-256 叶子证书
+  （IsCa::NoCa + digitalSignature + serverAuth + SAN=localhost/127.0.0.1）、
+  有效期总长恰好 14 天（含 1h 时钟回拨）；客户端 `serverCertificateHashes` 传**指纹数组**兼容轮换窗口。
 
 ---
 
@@ -599,7 +634,7 @@ curl -H "x-internal-token: dev-internal-0123456789abcdef" \
 | P1 | Rust：推送流+背压 resync+`/internal/publish`(users[]/broadcast)+snapshot+cert+healthz+metrics；presence delta(epoch/seq)+对账；Nest：PresenceMirror+TransportBridge+开关装配+真指纹下发+`/internal/*` 两层防线；`groups/sessions` fan-out 改 `toUsers`；桌面推送消费+seq/resync 对账 | ✅（回环集成测试覆盖 publish→帧/路由/going_away） |
 | P2 | e2e 传输无关（FakeTransportBridge + supertest `/internal/rt/*`，12 个用例全过）；`internal-rt.controller`（文案逐字对齐）；Rust RPC 转发+token_expired+滥用防护；桌面 sendMessage/markRead 切 WT+重连风暴防护；minClientProto 协商两端 | ✅（`cargo test -p transport-server` 8 集成用例；e2e 12/12） |
 | P3 | Dockerfile（cargo-chef+ring）+ compose transport 服务（UDP 4433、单副本注释）+ deploy-transport.yml（独立 paths 过滤）+ ci.yml cargo test + .env.example + deploy/README checklist | ✅ 代码 / ⬜ VPS 联调、真机端到端 |
-| P4 | 清理 Socket.IO | ⬜ 按方案 soak 1–2 周后执行 |
+| P4 | 清理 Socket.IO（删网关/旧实现/依赖/开关，`/transport/config` 503，桌面端 WT 单实现） | ✅（经所有者决策跳过 soak；server 单测 62 + e2e 12 + tsc + svelte-check 全绿） |
 
 **人工验证清单**（代码之外）：① spike S1–S4（上表）；② VPS 部署三步（deploy/README「Rust 传输网关」节）；
 ③ 双桌面实例端到端对打（§9 端到端行）；④ 回退演练（`RT_TRANSPORT=socket` 重启即回退）；

@@ -27,7 +27,7 @@
 //! })).json();
 //! const raw = Uint8Array.from(atob(fp.certSha256[0]), c => c.charCodeAt(0));
 //! const wt = new WebTransport('https://127.0.0.1:4433/wt', {
-//!   serverCertificateHashes: [{ algorithm: 'SHA-256', value: raw }],
+//!   serverCertificateHashes: [{ algorithm: 'sha-256', value: raw }], // ⚠️ 必须小写，Chromium 大小写敏感
 //!   congestionControl: 'low-latency',
 //! });
 //! await wt.ready;                       // ← 不抛 SecurityError / 握手失败 = S1+S2 通过

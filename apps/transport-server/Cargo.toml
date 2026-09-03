@@ -40,3 +40,5 @@ rand = "0.9"
 tempfile = "3"
 bytes = "1"
 url = "2"
+# 证书属性回归测试：独立解析 DER，锁定 Chromium 指纹校验的硬性要求（S2 实测）
+x509-parser = "0.17"

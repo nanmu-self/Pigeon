@@ -19,6 +19,8 @@ use tokio::sync::RwLock;
 
 /// 证书有效期（规范上限 14 天，留 1 小时余量避免边界竞态）
 pub const CERT_TTL_DAYS: i64 = 14;
+/// 时钟偏差容忍（算进有效期总长内，见 generate）
+const CLOCK_SKEW_BACKDATE: time::Duration = time::Duration::hours(1);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CertInfo {
@@ -53,9 +55,21 @@ fn generate() -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>, C
 
     let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()])
         .map_err(|e| format!("cert params: {e}"))?;
+    // ⚠️ SAN 必须含连接目标的 IP：Chromium 指纹模式实测仍校验 SAN 与主机匹配
+    // （规范说不校验、moq 的可用配置也显式带 IP.1=127.0.0.1，见其 dev/setup
+    // 「avoid a CA (bugged)」注释）——只写 DNS localhost 时连 127.0.0.1 被拒。
+    params
+        .subject_alt_names
+        .push(rcgen::SanType::IpAddress(std::net::IpAddr::from([127, 0, 0, 1])));
     let now = time::OffsetDateTime::now_utc();
-    params.not_before = now - time::Duration::hours(1); // 时钟偏差容忍
-    params.not_after = now + time::Duration::days(CERT_TTL_DAYS);
+    // ⚠️ 规范要求有效期**总长** ≤ 14 天（not_after - not_before），1h 时钟
+    // 回拨必须算进总长。注：此前「14 天整被拒」的实验结论无效——真机根因
+    // 是客户端 algorithm 大小写（'SHA-256' → 'sha-256'，见 webtransport.ts），
+    // 修正后 14 天整实测通过。
+    let not_before = now - CLOCK_SKEW_BACKDATE;
+    let not_after = not_before + time::Duration::days(CERT_TTL_DAYS);
+    params.not_before = not_before;
+    params.not_after = not_after;
     params.is_ca = rcgen::IsCa::NoCa; // 必须是叶子证书
     params.key_usages = vec![rcgen::KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
@@ -63,7 +77,7 @@ fn generate() -> Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>, C
     let cert = params.self_signed(&key_pair).map_err(|e| format!("self sign: {e}"))?;
     let der = cert.der().to_vec();
     let fingerprint = sha256_b64(&der);
-    let expires_at_ms = now_ms() + CERT_TTL_DAYS * 24 * 3600 * 1000;
+    let expires_at_ms = not_after.unix_timestamp() as i64 * 1000;
 
     let key_der = key_pair.serialize_der();
     Ok((
@@ -170,6 +184,45 @@ mod tests {
         // SHA-256("abc") 的前 8 字节 = ba7816bf 8f01cfea
         let hex = hex_of(b"abc");
         assert!(hex.starts_with("ba7816bf8f01cfea"));
+    }
+
+    /// 锁死 Chromium `serverCertificateHashes` 的硬性要求（真机 S2 实测：
+    /// 有效期总长 14d+1h 被拒，报 CERTIFICATE_VERIFY_FAILED，指纹全对也没用）。
+    /// 独立解析 DER，不复用 generate 的构造逻辑，防止「同错互证」。
+    #[test]
+    fn der_meets_chromium_hash_pinning_requirements() {
+        use x509_parser::prelude::*;
+
+        let (chain, _key, info) = generate().unwrap();
+        let (_, cert) = parse_x509_certificate(chain[0].as_ref()).unwrap();
+
+        // 有效期总长 ≤ 14 天（Chromium 检查的是 not_after - not_before）
+        let validity = cert.validity();
+        let period_secs = validity.not_after.timestamp() - validity.not_before.timestamp();
+        assert!(
+            period_secs <= CERT_TTL_DAYS * 24 * 3600,
+            "有效期总长 {period_secs}s 超过 {} 天",
+            CERT_TTL_DAYS
+        );
+        // not_before 已回拨（时钟偏差容忍）、not_after 仍在未来
+        assert!(validity.not_before.timestamp() * 1000 <= now_ms());
+        assert_eq!(info.expires_at_ms, validity.not_after.timestamp() * 1000);
+
+        // 必须是叶子证书（非 CA）
+        assert!(!cert.is_ca(), "必须是叶子证书（IsCa::NoCa）");
+
+        // KU 必须含 digitalSignature；EKU 必须含 serverAuth
+        assert!(cert.key_usage().unwrap().unwrap().value.digital_signature());
+        assert!(cert.extended_key_usage().unwrap().unwrap().value.server_auth);
+
+        // SAN 必须同时覆盖 localhost 与 127.0.0.1（WT_PUBLIC_URL 两者都可能下发）
+        let san = cert.subject_alternative_name().unwrap().unwrap().value;
+        let has_dns_localhost = san.general_names.iter().any(|g| matches!(g, GeneralName::DNSName("localhost")));
+        let has_ip_loopback = san.general_names.iter().any(|g| {
+            matches!(g, GeneralName::IPAddress(ip) if ip.to_vec() == [127u8, 0, 0, 1])
+        });
+        assert!(has_dns_localhost, "缺少 DNS SAN localhost");
+        assert!(has_ip_loopback, "缺少 IP SAN 127.0.0.1");
     }
 
     fn hex_of(data: &[u8]) -> String {
