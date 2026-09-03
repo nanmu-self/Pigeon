@@ -550,6 +550,17 @@ export class ChatStore {
     }
   }
 
+  /**
+   * 窗口回到前台时补发已读。
+   * onNewMessage 在窗口不可见时有意不清未读（保留红点 + 弹通知），
+   * 因此用户唤回窗口、且会话仍开着时需要补一次回执，
+   * 否则未读数会一直挂着直到用户手动切会话。
+   */
+  async onWindowForeground(): Promise<void> {
+    if (!this.current || !windowVisible()) return;
+    await this.markCurrentRead();
+  }
+
   // ── WS 事件处理 ──────────────────────────────────────────
 
   private async onNewMessage(m: WsChatMessage): Promise<void> {
@@ -591,28 +602,29 @@ export class ChatStore {
       this.liveMentionedIds = [...this.liveMentionedIds, m.id];
     }
 
-    if (this.current?.id === m.conversationId) {
+    // 系统通知判定必须在「会话是否打开」分支之外：
+    // 开着某会话再收起到托盘也要提醒（否则消息静默丢失）。
+    // 自己在其他设备发的消息不提醒；会话开着且窗口在前台不打扰。
+    const visible = windowVisible();
+    const isCurrent = this.current?.id === m.conversationId;
+    if (!isSelf && (!isCurrent || !visible)) {
+      const title =
+        session.kind === 'group'
+          ? `${session.name ?? '群聊'} · ${m.senderName ?? '成员'}`
+          : (session.peer?.nickname ?? '新消息');
+      void notifyMessage(title, messageBodyPreview(m.kind, m.content, m.meta));
+    }
+
+    if (isCurrent) {
       if (inserted && !this.messages.some((x) => x.id === message.id)) {
         this.messages = [...this.messages, message];
       }
-      // 会话正开着 → 立即回执已读
-      await this.markCurrentRead();
-    } else {
-      // 会话未打开或窗口在后台 → 系统通知（点击唤回主窗口）
-      // 自己在其他设备的消息不提醒；当前会话开着且窗口前台也不打扰
-      if (!isSelf && (this.current?.id !== m.conversationId || !windowVisible())) {
-        const title =
-          session.kind === 'group'
-            ? `${session.name ?? '群聊'} · ${m.senderName ?? '成员'}`
-            : (session.peer?.nickname ?? '新消息');
-        void notifyMessage(title, messageBodyPreview(m.kind, m.content, m.meta));
-      }
-      if (mentionsMe) {
-        // 会话未打开 → 特殊通知（红点之外再弹应用内提示）
-        showToast(
-          `「${session.kind === 'group' ? session.name : session.peer?.nickname}」中提到了你`,
-        );
-      }
+      // 会话正开着且窗口在前台 → 立即回执已读；
+      // 窗口收起时用户并没真看到，不能清未读（否则红点也没了）
+      if (visible) await this.markCurrentRead();
+    } else if (mentionsMe) {
+      // 会话未打开 → 特殊通知（红点之外再弹应用内提示）
+      showToast(`「${session.kind === 'group' ? session.name : session.peer?.nickname}」中提到了你`);
     }
     // 刷新列表（未读数/预览/排序）
     void this.loadSessions();

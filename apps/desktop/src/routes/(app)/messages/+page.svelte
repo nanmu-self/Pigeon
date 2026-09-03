@@ -120,6 +120,16 @@
   onMount(() => {
     chat.initWsHandlers();
     void chat.loadSessions();
+
+    // 窗口从托盘/后台唤回 → 补发当前会话的已读回执
+    // （后台时收到的消息有意保留未读，见 chat-store.onWindowForeground）
+    const onForeground = () => void chat.onWindowForeground();
+    document.addEventListener("visibilitychange", onForeground);
+    window.addEventListener("focus", onForeground);
+    return () => {
+      document.removeEventListener("visibilitychange", onForeground);
+      window.removeEventListener("focus", onForeground);
+    };
   });
 
   // 新消息 / 切换会话 → 滚到底部
