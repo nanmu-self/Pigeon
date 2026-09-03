@@ -14,6 +14,7 @@
   import { groupsApi } from "$lib/api/groups";
   import { uploadToQiniu, isUploadCanceled } from "$lib/upload/qiniu";
   import { call } from "$lib/webrtc/call-store.svelte";
+  import { profile } from "$lib/api/profile.svelte";
 
   // ── Lucide 图标（官方推荐：子路径单独导入，tree-shakable） ──
   import Clock from "@lucide/svelte/icons/clock";
@@ -60,6 +61,30 @@
   let hoverMsgId = $state<number | null>(null);
   const QUICK_EMOJIS = ["👍", "❤️", "😂", "🎉", "👀"] as const;
 
+  /** 会话列表宽度（可拖拽调节） */
+  const SIDEBAR_MIN = 220;
+  const SIDEBAR_MAX = 480;
+  let sidebarWidth = $state(320);
+  let dragging = $state(false);
+  let resizeHandleEl = $state<HTMLDivElement>();
+
+  function startResize(e: MouseEvent) {
+    e.preventDefault();
+    dragging = true;
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+    const onMove = (ev: MouseEvent) => {
+      sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startW + ev.clientX - startX));
+    };
+    const onUp = () => {
+      dragging = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   const isGroup = $derived(chat.current?.kind === "group");
   const groupTitle = $derived(
     chat.current?.kind === "group"
@@ -73,6 +98,17 @@
       return title.toLowerCase().includes(searchQuery.trim().toLowerCase());
     }),
   );
+
+  /** 消息头像：自己用 profile，对端/群用会话资料 */
+  const currentSession = $derived(chat.sessions.find((s) => s.id === chat.current?.id));
+  function msgAvatar(sender: "self" | "other"): { url: string; text: string } {
+    if (sender === "self")
+      return { url: profile.avatarUrl, text: (profile.displayName || "我").slice(0, 1) };
+    const s = currentSession;
+    if (!s) return { url: "", text: "?" };
+    if (s.kind === "group") return { url: s.avatarUrl ?? "", text: (s.name ?? "群").slice(0, 1) };
+    return { url: s.peer?.avatarUrl ?? "", text: (s.peer?.nickname ?? "?").slice(0, 1) };
+  }
 
   function sessionAvatarText(s: (typeof chat.sessions)[number]): string {
     return s.kind === "group" ? (s.name ?? "群").slice(0, 1) : (s.peer?.nickname ?? "?").slice(0, 1);
@@ -250,7 +286,7 @@
 
 <div class="flex h-full bg-[var(--p-bg)]">
   <!-- ══ 会话列表 ══════════════════════════════════════ -->
-  <div class="flex w-80 shrink-0 flex-col border-r border-[var(--p-border)] bg-[var(--p-card)]">
+  <div class="flex shrink-0 flex-col border-r border-[var(--p-border)] bg-[var(--p-card)]" style="width: {sidebarWidth}px">
     <div class="flex items-center justify-between border-b border-[var(--p-border)] px-4 py-3">
       <h1 class="text-xl font-semibold text-[var(--p-fg)]">消息</h1>
       <div class="flex items-center gap-1">
@@ -396,6 +432,17 @@
     </div>
   </div>
 
+  <!-- 拖拽分隔条：会话列表 ↔ 聊天区 -->
+  <div
+    bind:this={resizeHandleEl}
+    class="h-full w-1 shrink-0 cursor-col-resize bg-transparent transition-colors hover:bg-[var(--p-primary)]/40 {
+      dragging ? 'bg-[var(--p-primary)]/60' : ''
+    }"
+    onmousedown={startResize}
+    role="separator"
+    aria-orientation="vertical"
+  ></div>
+
   <!-- ══ 聊天区 ════════════════════════════════════════ -->
   {#if chat.current && chat.localConversation}
     <div class="flex min-w-0 flex-1 flex-col bg-[var(--p-muted)]/30">
@@ -500,6 +547,18 @@
               </span>
             {:else}
               {@const replyInfo = parseReplySummary(msg.replySummary)}
+              {@const av = msgAvatar(msg.sender === 'self' ? 'self' : 'other')}
+              {#if msg.sender === 'other'}
+                {#if av.url}
+                  <img
+                    src={av.url}
+                    alt={msg.senderName}
+                    class="mr-2 h-8 w-8 shrink-0 self-start rounded-full object-cover"
+                  />
+                {:else}
+                  <div class="mr-2 flex h-8 w-8 shrink-0 items-center justify-center self-start rounded-full bg-[var(--p-secondary)] text-xs font-medium text-[var(--p-secondary-fg)]">{av.text}</div>
+                {/if}
+              {/if}
               <div class="relative flex max-w-[70%] flex-col {msg.sender === 'self' ? 'items-end' : 'items-start'}">
                 {#if replyInfo}
                   <!-- 引用预览块 -->
