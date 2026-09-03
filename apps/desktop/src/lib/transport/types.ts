@@ -11,16 +11,15 @@ export interface HandlerEntry {
 
 /**
  * 传输实现与 SocketManager（门面）之间的宿主回调。
- * 两种实现（Socket.IO / WebTransport）都只跟这个接口对话。
  */
 export interface TransportHost {
   /** token 每次连接从 tokenStore 现读（登录/登出后无需重建实现） */
   getToken(): string;
-  /** 当前业务 handler 注册表（socket.io 重连后重绑用） */
+  /** 当前业务 handler 注册表（门面按它分发推送） */
   getHandlers(): HandlerEntry[];
   /** 状态流转（connecting/connected/reconnecting/disconnected + lastError） */
   onState(state: TransportState, error?: string | null): void;
-  /** 握手完成（等价 connection:welcome） */
+  /** 握手完成（hello 响应 welcome） */
   onWelcome(socketId: string, userId: string): void;
   /** S2C 推送分发（门面按 handlerList 转发） */
   onPush(type: keyof ServerToClientEvents, payload: unknown): void;
@@ -35,10 +34,8 @@ export interface TransportImpl {
   connect(): void;
   disconnect(): void;
   isConnected(): boolean;
-  /** emitWithAck 等价物：ok=false 或超时 → reject(Error) */
+  /** 请求-应答：ok=false 或超时 → reject(Error) */
   rpc<T>(type: string, payload?: unknown, timeoutMs?: number): Promise<T>;
-  /** handler 注册表变化后同步（socket.io 需绑/解绑；wt 经门面分发，无需处理） */
-  syncHandlers(): void;
 }
 
 /** 帧协议版本（Rust MIN_CLIENT_PROTO 同步） */

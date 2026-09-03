@@ -6,7 +6,7 @@ import { AppModule } from '../src/app.module.js';
 import { CaptchaService } from '../src/auth/captcha.service.js';
 import { PrismaService } from '../src/prisma.service.js';
 import { WsEventsService } from '../src/ws/ws-events.service.js';
-import { FakeTransportBridge, INTERNAL_TOKEN, rtAck } from './helpers/transport.js';
+import { FakeTransportBridge, applyTransportEnv, rtAck } from './helpers/transport.js';
 import type {
   AuthResult,
   FriendRequestItem,
@@ -48,7 +48,7 @@ let charlie: AuthResult;
 
 describe('群聊链路 (e2e)', () => {
   beforeAll(async () => {
-    process.env.WT_INTERNAL_TOKEN = INTERNAL_TOKEN;
+    applyTransportEnv();
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
     })

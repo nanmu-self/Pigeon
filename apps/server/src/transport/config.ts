@@ -1,19 +1,12 @@
 /**
- * 实时传输层配置（RT_TRANSPORT 开关，决策 D5）。
+ * 实时传输层配置（WebTransport 是唯一实时通道，P4 起 Socket.IO 已删）。
  *
- * RT_TRANSPORT 同时决定：
- *  - WsModule 装配哪个 bridge（旧 Socket.IO 桥 / 新 HTTP 桥）与网关是否挂载；
- *  - GET /transport/config 下发给客户端的 transport 字段（灰度权威开关）。
- *
- * ⚠️ RT_TRANSPORT=wt 时必须显式配置 JWT_SECRET（Nest 未配置时会随机生成，
- * 与 Rust 验签密钥必然不同 → 「能连上但 hello 全部 auth_failed」），
- * 以及 TRANSPORT_INTERNAL_URL / WT_PUBLIC_URL / WT_INTERNAL_TOKEN，缺一启动失败（fail-fast）。
+ * ⚠️ 必须显式配置 JWT_SECRET（Nest 未配置时会随机生成，与 Rust 验签密钥
+ * 必然不同 → 「能连上但 hello 全部 auth_failed」），以及
+ * TRANSPORT_INTERNAL_URL / WT_PUBLIC_URL / WT_INTERNAL_TOKEN，缺一启动失败（fail-fast）。
  */
 
-export type TransportMode = 'socket' | 'wt';
-
 export interface TransportSettings {
-  mode: TransportMode;
   /** Rust 传输服务 internal HTTP 基址（如 http://pigeon-transport:3901） */
   internalUrl: string;
   /** 下发给客户端的 WT 公网地址（如 https://example.com:4433/wt） */
@@ -32,27 +25,19 @@ let cached: TransportSettings | null = null;
 export function resolveTransportSettings(): TransportSettings {
   if (cached) return cached;
 
-  const mode = (process.env.RT_TRANSPORT ?? 'socket') as TransportMode;
-  if (mode !== 'socket' && mode !== 'wt') {
-    throw new Error(`RT_TRANSPORT 非法：${mode}（只支持 socket | wt）`);
-  }
-
   const minClientProto = Number(process.env.RT_MIN_CLIENT_PROTO ?? 1);
 
-  if (mode === 'wt') {
-    const missing = [
-      process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 16 ? null : 'JWT_SECRET（≥16 字节，必须与 Rust 完全一致，否则验签 100% 失败）',
-      process.env.TRANSPORT_INTERNAL_URL ? null : 'TRANSPORT_INTERNAL_URL（如 http://pigeon-transport:3901）',
-      process.env.WT_PUBLIC_URL ? null : 'WT_PUBLIC_URL（如 https://example.com:4433/wt）',
-      process.env.WT_INTERNAL_TOKEN ? null : 'WT_INTERNAL_TOKEN（与 Rust 一致的长随机串）',
-    ].filter((v): v is string => v !== null);
-    if (missing.length > 0) {
-      throw new Error(`RT_TRANSPORT=wt 缺少必填环境变量：\n  - ${missing.join('\n  - ')}`);
-    }
+  const missing = [
+    process.env.JWT_SECRET && process.env.JWT_SECRET.length >= 16 ? null : 'JWT_SECRET（≥16 字节，必须与 Rust 完全一致，否则验签 100% 失败）',
+    process.env.TRANSPORT_INTERNAL_URL ? null : 'TRANSPORT_INTERNAL_URL（如 http://pigeon-transport:3901）',
+    process.env.WT_PUBLIC_URL ? null : 'WT_PUBLIC_URL（如 https://example.com:4433/wt）',
+    process.env.WT_INTERNAL_TOKEN ? null : 'WT_INTERNAL_TOKEN（与 Rust 一致的长随机串）',
+  ].filter((v): v is string => v !== null);
+  if (missing.length > 0) {
+    throw new Error(`实时传输配置缺失（WebTransport 是唯一实时通道）：\n  - ${missing.join('\n  - ')}`);
   }
 
   cached = {
-    mode,
     internalUrl: (process.env.TRANSPORT_INTERNAL_URL ?? 'http://127.0.0.1:3901').replace(/\/+$/, ''),
     publicUrl: process.env.WT_PUBLIC_URL ?? '',
     internalToken: process.env.WT_INTERNAL_TOKEN ?? '',

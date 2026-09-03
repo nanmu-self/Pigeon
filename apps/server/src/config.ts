@@ -1,5 +1,5 @@
 /**
- * 允许的前端来源（HTTP CORS 与 Socket.IO CORS 共用）。
+ * 允许的前端来源（HTTP CORS 白名单）。
  *
  * Pigeon 是 Tauri 桌面应用直连 NestJS：
  *  - dev   阶段前端跑在 Vite（http://localhost:1420）；

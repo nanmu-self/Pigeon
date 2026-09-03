@@ -22,13 +22,13 @@ import { InternalTokenGuard } from './internal-token.guard.js';
 /**
  * C2S 统一入口（§6.2）：POST /internal/rt/:type
  *
- * Rust 把 RPC 帧原样转发到这里：body = 事件载荷（与 Socket.IO 事件载荷同构），
+ * Rust 把 RPC 帧原样转发到这里：body = 事件载荷（即 shared-types 的 C2S 事件载荷），
  * 用户上下文走 x-user-id / x-display-name-b64 头（昵称可能含非 ASCII，header
  * 值只能是可见 ASCII，由 Rust base64url 编码、这里解码）。
  *
  * 响应恒 HTTP 200 + {ok, data|error}（业务错误走 body，Rust 据此组装 RtResponse；
- * 内部防线失败才走 401/404 让 Rust 记日志）。处理体自 events.gateway.ts 原样迁移，
- * 错误文案逐字一致（客户端 toast 依赖）。
+ * 内部防线失败才走 401/404 让 Rust 记日志）。错误文案与迁移前的 Socket.IO 网关
+ * 逐字一致（客户端 toast 依赖），勿随意改写。
  */
 @Controller('internal/rt')
 @UseGuards(InternalTokenGuard)
@@ -106,7 +106,7 @@ export class InternalRtController {
     }
   }
 
-  // ── 音视频通话信令（Socket.IO 路径 events.gateway.ts 同源：CallService） ──
+  // ── 音视频通话信令（CallService，与 C2S 事件一一对应） ──
 
   private async onCallSignal(
     request: Request,

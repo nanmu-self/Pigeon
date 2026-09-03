@@ -1,17 +1,33 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PresenceMirrorService } from './presence-mirror.service.js';
 import { assertInternalAccess, ipInCidr, resetTransportSettingsCache } from './config.js';
 
 /**
  * presence 镜像（D6）语义：
  *   epoch 变化 → 重建；seq 乱序/重复丢弃；正常 delta 更新 + 广播语义。
- * 这里直接驱动 applyDelta（不落网络）；snapshot 拉取走 socket 模式短路。
+ * 这里直接驱动 applyDelta（不落网络）；snapshot 拉取用 fetch stub 模拟不可达
+ * （applyDelta 内部会异步拉快照，stub 掉避免真实网络尝试）。
  */
 
 const EPOCH_A = '1750000000000-aaaa';
 const EPOCH_B = '1760000000000-bbbb';
 
 describe('PresenceMirrorService (D6)', () => {
+  beforeAll(() => {
+    // resolveTransportSettings 无条件 fail-fast：单测也要备齐传输配置
+    process.env.JWT_SECRET = 'test-secret-0123456789abcdef';
+    process.env.TRANSPORT_INTERNAL_URL = 'http://127.0.0.1:3901';
+    process.env.WT_PUBLIC_URL = 'https://example.com:4433/wt';
+    process.env.WT_INTERNAL_TOKEN = 'test-internal-0123456789abcdef';
+    resetTransportSettingsCache();
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('connection refused'))));
+  });
+
+  afterAll(() => {
+    vi.unstubAllGlobals();
+    resetTransportSettingsCache();
+  });
+
   it('正常 delta：首连/末路更新镜像，乱序与重复被丢弃', () => {
     const mirror = new PresenceMirrorService();
     // 模拟 Rust 已推过一个初始 delta（seq=5）
@@ -46,11 +62,11 @@ describe('PresenceMirrorService (D6)', () => {
     expect(mirror.isOnline('4')).toBe(true);
   });
 
-  it('socket 模式下 refreshSnapshot 短路（无镜像来源，不报错）', async () => {
-    process.env.RT_TRANSPORT = 'socket';
-    resetTransportSettingsCache();
+  it('transport 不可达 → refreshSnapshot 返回 false 并保留现有镜像', async () => {
     const mirror = new PresenceMirrorService();
+    mirror.applyDelta({ epoch: EPOCH_A, seq: 1, userId: '1', online: true });
     await expect(mirror.refreshSnapshot()).resolves.toBe(false);
+    expect(mirror.isOnline('1')).toBe(true); // 不清空：清空会造成大面积「假离线」
   });
 });
 

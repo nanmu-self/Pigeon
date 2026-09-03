@@ -143,8 +143,20 @@ export class FakeTransportBridge {
   }
 }
 
-/** e2e 的内部 API 令牌（spec 顶部写入 process.env，guard 动态读取） */
+/** e2e 的内部 API 令牌（applyTransportEnv 写入 process.env，guard 动态读取） */
 export const INTERNAL_TOKEN = 'e2e-internal-token-0123456789abcdef';
+
+/**
+ * e2e 启动 AppModule 前补齐传输配置：resolveTransportSettings 无条件 fail-fast
+ * （WebTransport 是唯一实时通道），FakeTransportBridge 只替换推送桥，
+ * 配置校验与 presence 镜像仍会读这些值。
+ */
+export function applyTransportEnv(): void {
+  process.env.JWT_SECRET = process.env.JWT_SECRET ?? 'e2e-jwt-secret-0123456789abcdef';
+  process.env.TRANSPORT_INTERNAL_URL = process.env.TRANSPORT_INTERNAL_URL ?? 'http://127.0.0.1:3901';
+  process.env.WT_PUBLIC_URL = process.env.WT_PUBLIC_URL ?? 'https://127.0.0.1:4433/wt';
+  process.env.WT_INTERNAL_TOKEN = process.env.WT_INTERNAL_TOKEN ?? INTERNAL_TOKEN;
+}
 
 /** C2S：supertest 打 /internal/rt/:type（Rust 转发的等价物） */
 export function rtPost(
@@ -161,7 +173,7 @@ export function rtPost(
     .send(payload as object);
 }
 
-/** C2S ack：返回与旧 socket emitWithAck 相同的 {ok, data?, error?} 形状 */
+/** C2S ack：返回 {ok, data?, error?} 形状（与 RPC RtResponse 语义一致） */
 export async function rtAck<T>(
   api: ReturnType<typeof request>,
   user: AuthResult,

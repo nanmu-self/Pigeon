@@ -20,8 +20,8 @@ export const { ObserveModule, ObserveInstrument } = createObserveModule();
     PrismaModule,
     // 注册 / 登录(JWT 签发)
     AuthModule,
-    // Socket.IO 实时通道（Tauri 前端直连；RT_TRANSPORT=wt 时桥接到 Rust 传输服务）
-    WsModule.register(),
+    // 实时推送注入面（WsEventsService token → TransportBridgeService）
+    WsModule,
     // 实时传输层：/internal/rt/*、/internal/presence/delta、/transport/config
     // + presence 镜像 + TransportBridgeService（WS 桥的 wt 实现）
     TransportModule,

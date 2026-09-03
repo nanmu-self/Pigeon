@@ -16,7 +16,7 @@ import type {
   SessionSummary,
   WsChatMessage,
 } from '@pigeon/shared-types';
-import { FakeTransportBridge, INTERNAL_TOKEN, rtAck } from './helpers/transport.js';
+import { FakeTransportBridge, applyTransportEnv, rtAck } from './helpers/transport.js';
 
 /**
  * 聊天链路端到端验证（传输无关，D7）：
@@ -58,7 +58,7 @@ let charlie: AuthResult;
 
 describe('聊天链路 (e2e)', () => {
   beforeAll(async () => {
-    process.env.WT_INTERNAL_TOKEN = INTERNAL_TOKEN;
+    applyTransportEnv();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],

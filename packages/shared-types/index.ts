@@ -137,10 +137,10 @@ export interface UploadSessionTicket {
 }
 
 // ─────────────────────────────────────────────────────────────
-// WebSocket (Socket.IO) 事件契约
+// 实时事件契约（WebTransport 推送流 / RPC；P4 起 Socket.IO 已删）
 //
 // server / desktop 两侧均只做 `import type`（编译期擦除），事件名与载荷
-// 由下列接口约束；socket.io-client 与 @nestjs/websockets 都支持泛型注入。
+// 由下列接口约束；fixtures/rt-*.json 是 Nest↔Rust 协议夹具（两侧单测锁定）。
 // ─────────────────────────────────────────────────────────────
 
 /** 事件 ack 的统一返回结构 */
@@ -424,11 +424,6 @@ export interface WsCallState {
 }
 
 export interface ServerToClientEvents {
-  'connection:welcome': (payload: {
-    socketId: string;
-    userId: string;
-    serverTime: number;
-  }) => void;
   'message:new': (payload: WsChatMessage) => void;
   'message:read': (payload: WsReadReceipt) => void;
   'message:delivered': (payload: WsDeliveredReceipt) => void;
@@ -456,14 +451,6 @@ export interface ServerToClientEvents {
 
 /** Client → Server */
 export interface ClientToServerEvents {
-  'conversation:join': (
-    conversationId: string,
-    ack: WsAckCallback<{ joined: string[] }>,
-  ) => void;
-  'conversation:leave': (
-    conversationId: string,
-    ack: WsAckCallback<{ joined: string[] }>,
-  ) => void;
   'message:send': (
     payload: {
       conversationId: string;
@@ -518,17 +505,6 @@ export interface ClientToServerEvents {
     ack: WsAckCallback<null>,
   ) => void;
   'health:ping': (ack: WsAckCallback<{ pong: number; online: number }>) => void;
-}
-
-/** 多实例间广播（当前单实例部署，留空） */
-export interface InterServerEvents {}
-
-/** 挂在每个 socket 实例上的会话数据 */
-export interface SocketData {
-  userId: string;
-  displayName: string;
-  /** Unix 毫秒时间戳 */
-  connectedAt: number;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -594,7 +570,7 @@ export interface RtHello {
   clientVersion: string;
 }
 
-/** hello 响应：welcome（等价旧 connection:welcome）或 error（随后服务端关连接） */
+/** hello 响应：welcome（连接就绪）或 error（随后服务端关连接） */
 export type RtHelloResult =
   | { type: 'welcome'; connId: string; userId: string; serverTime: number }
   | {

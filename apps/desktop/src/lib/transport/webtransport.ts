@@ -4,7 +4,7 @@ import { FrameReader, writeFrame } from './frame';
 import { fetchTransportConfig } from './config';
 
 /**
- * WebTransport 传输实现（连接状态机，§7）。
+ * WebTransport 传输实现（连接状态机，§7）—— 唯一实时通道（P4 起 Socket.IO 已删）。
  *
  * - 连接：new WebTransport(url, {serverCertificateHashes}) → ready（8s 超时）
  * - hello：bi 流 #0 发 {v:1, type:'hello', token, clientProto} → welcome/error
@@ -14,6 +14,8 @@ import { fetchTransportConfig } from './config';
  * - 重连：closed → 1s 起指数退避 + 随机抖动（上限 5s）；
  *   连续 auth_failed/token_expired ≥ 3 次 → 停止重连并提示重新登录
  *   （项目无 refresh token，7 天 token 过期后要求重新登录是预期行为）
+ * - 终态（不重连）：环境不支持 WebTransport / 配置 401 / 服务端未启用 wt /
+ *   客户端版本过旧 —— 都给出可读提示，避免无意义重连风暴
  */
 
 const READY_TIMEOUT_MS = 8_000;
@@ -52,7 +54,7 @@ export class WtTransport implements TransportImpl {
 
   constructor(
     private readonly host: TransportHost,
-    /** 每次重连前重新取配置（服务端可灰度/回退，指纹也可能轮换） */
+    /** 每次重连前重新取配置（指纹可能轮换） */
     private readonly getConfig: () => Promise<TransportConfig>,
     private readonly clientVersion: string,
   ) {}
@@ -65,14 +67,17 @@ export class WtTransport implements TransportImpl {
   private async start(): Promise<void> {
     if (this.stopped || this.wt) return;
     this.host.onState('connecting');
+    if (typeof WebTransport === 'undefined') {
+      // 老 WebView / 非 secure context：重试也不会成功，直接给终态
+      this.host.onState('disconnected', '当前 WebView 不支持 WebTransport，请升级系统或 WebView2');
+      return;
+    }
     try {
       // 1. 每次连接前取配置（禁长缓存）
       const config = await this.getConfig();
       if (this.stopped) return;
       if (config.transport !== 'wt') {
-        // 服务端把开关切回 socket（灰度/回退）→ 交还门面重选实现
-        this.host.onState('reconnecting', '服务端已切换实时通道');
-        this.notifyTransportSwitch('socket');
+        this.host.onState('disconnected', '服务端未启用 WebTransport 通道');
         return;
       }
       if (CLIENT_PROTO < config.minClientProto) {
@@ -81,8 +86,10 @@ export class WtTransport implements TransportImpl {
       }
 
       // 2. QUIC 握手（ready 8s 超时）
+      // ⚠️ algorithm 必须小写 'sha-256'：Chromium 大小写敏感，写 'SHA-256'
+      // 会让哈希永远匹配不上 → CERTIFICATE_VERIFY_FAILED（真机实测）
       const hashes = config.certSha256.map((v) => ({
-        algorithm: 'SHA-256' as const,
+        algorithm: 'sha-256' as const,
         value: base64ToBytes(v),
       }));
       const wt = new WebTransport(config.url, {
@@ -131,6 +138,11 @@ export class WtTransport implements TransportImpl {
     } catch (error) {
       if (this.stopped || this.intentionalClose) return;
       this.wt = null;
+      if ((error as { status?: number }).status === 401) {
+        // 配置接口 401 = token 缺失/过期：重试也不会成功，给终态
+        this.host.onState('disconnected', '登录状态已失效，请重新登录');
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.host.onState('reconnecting', message);
       this.scheduleReconnect();
@@ -153,10 +165,6 @@ export class WtTransport implements TransportImpl {
 
   isConnected(): boolean {
     return this.wt !== null;
-  }
-
-  syncHandlers(): void {
-    /* wt 推送统一经 host.onPush 分发，无需绑定 */
   }
 
   /** RPC：每请求一条新 bi 流，{id, type, payload} → {id, ok, data|error} */
@@ -252,14 +260,6 @@ export class WtTransport implements TransportImpl {
       void this.start();
     }, backoff + jitter);
   }
-
-  private notifyTransportSwitch(mode: 'socket'): void {
-    this.stopped = true;
-    this.onSwitch?.(mode);
-  }
-
-  /** 门面注入：服务端下发 switch 时重建另一实现 */
-  onSwitch: ((mode: 'socket') => void) | null = null;
 }
 
 /** base64 → Uint8Array（serverCertificateHashes.value 要原始摘要字节） */

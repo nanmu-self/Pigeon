@@ -39,8 +39,7 @@ PORT=3048
 DATABASE_URL=postgresql://pigeon:<密码>@1Panel-postgresql-xxxx:5432/pigeon
 JWT_SECRET=<强随机值>
 CLIENT_ORIGINS=http://localhost:1420,tauri://localhost,http://tauri.localhost,https://tauri.localhost
-# ── 实时传输（Rust WebTransport 网关；不启用则无需以下配置）──
-# RT_TRANSPORT=wt
+# ── 实时传输（Rust WebTransport 网关；P4 起唯一实时通道，以下必填，缺一 server 启动即失败）──
 # WT_PUBLIC_URL=https://ubuntu.n-m.ltd:4433/wt
 # TRANSPORT_INTERNAL_URL=http://pigeon-transport:3901
 # WT_INTERNAL_TOKEN=<长随机值，与 Rust 共享；两个服务必须一致>
@@ -93,7 +92,7 @@ GitHub → 仓库右侧 Packages → pigeon-server → Package settings → Chan
 - 域名：`pigeon-api.n-m.ltd`（⚠️ `pigeon.n-m.ltd` 是七牛 Bucket 域名，别用）
 - 代理地址：`http://127.0.0.1:3048`
 - HTTPS 页签申请 Let's Encrypt 证书并强制 HTTPS
-- 反代配置确认带 WebSocket 头（1Panel 模板默认有）
+- 反代只服务 REST；实时通道（QUIC/UDP 4433）直连容器，不经反代
 
 ## 桌面端连线上服务
 
@@ -103,11 +102,11 @@ VITE_PIGEON_SERVER_URL=https://pigeon-api.n-m.ltd pnpm --filter @pigeon/desktop 
 
 `https` 自动走 `wss`；Tauri 生产 origin 已在服务端默认 CORS 白名单。
 
-## Rust 传输网关（WebTransport，RT_TRANSPORT=wt 时启用）
+## Rust 传输网关（WebTransport，唯一实时通道）
 
 ### 上线 checklist（按顺序）
 
-1. **环境变量**：`/opt/pigeon/shared/env` 增加上述 RT_* / WT_* 变量；
+1. **环境变量**：`/opt/pigeon/shared/env` 增加上述 WT_* 变量（**必填**，缺一 server 启动即失败 fail-fast）；
    `JWT_SECRET` 必填（Rust 验签依赖，Nest 与 Rust 共用同一份 env）。
 2. **UDP 4433 放行**：云安全组/防火墙放行 `0.0.0.0:4433/udp`（OpenResty 反代不透传 QUIC/UDP，
    必须直连容器）；确认 1Panel 防火墙也放行。
@@ -123,10 +122,9 @@ VITE_PIGEON_SERVER_URL=https://pigeon-api.n-m.ltd pnpm --filter @pigeon/desktop 
    → 404/403；同时应用层有 x-internal-token + IP 网段校验双层防线。
 4. **首次启动**：`docker compose -f deploy/docker-compose.yml up -d transport`；
    `docker logs pigeon-transport` 确认 cert SHA-256 打印、internal HTTP 就绪。
-5. **回退开关演练**：`RT_TRANSPORT=socket` 重启 server → 客户端 `/transport/config`
-   下发 socket → 全量回到 Socket.IO 路径（无需发版）；再改回 `wt` 恢复。
-6. **transport 容器故障演练**：`docker stop pigeon-transport` → `/transport/config`
-   代理超时自动降级返回 socket → 老客户端继续走 Socket.IO。
+5. **传输容器故障演练**：`docker stop pigeon-transport` → `/transport/config` 返回 503 →
+   客户端保持退避重连并提示「无法获取实时通道配置」；容器恢复后自动连上
+   （P4 起 Socket.IO 已删除，**没有降级路径**，transport 是实时通道的单点）。
 
 ### 运维要点
 

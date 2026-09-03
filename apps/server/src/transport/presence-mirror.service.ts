@@ -30,11 +30,10 @@ export class PresenceMirrorService {
   reconcileDiffTotal = 0;
   epochRebuildTotal = 0;
 
-  /** 启动即拉一次全量；wt 模式下开 30s 对账循环 */
+  /** 启动即拉一次全量 + 开 30s 对账循环（WebTransport 是唯一实时通道） */
   onApplicationBootstrap(): void {
-    const settings = resolveTransportSettings();
     void this.refreshSnapshot();
-    if (settings.mode === 'wt') this.startReconcileLoop();
+    this.startReconcileLoop();
   }
 
   /** 每 30s 全量对账（入口 1 的兜底路径；防 delta 丢包漂移） */
@@ -94,7 +93,7 @@ export class PresenceMirrorService {
    */
   async refreshSnapshot(): Promise<boolean> {
     const settings = resolveTransportSettings();
-    if (settings.mode !== 'wt' || !settings.internalToken) return false; // socket 模式无镜像来源
+    if (!settings.internalToken) return false; // 未配置内部令牌 = 防线未就绪，无快照来源
     try {
       const response = await fetch(`${settings.internalUrl}/internal/presence/snapshot`, {
         headers: { 'x-internal-token': settings.internalToken },
