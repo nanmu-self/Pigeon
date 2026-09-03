@@ -1,7 +1,7 @@
 //! 聊天记录相关 Tauri commands — 薄封装：参数校验 + 错误转换，
 //! SQL 逻辑在 `chat.rs`（可单测）。
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::chat;
 use crate::db::{self, Db};
@@ -264,4 +264,20 @@ pub fn search_messages(
 ) -> Result<Vec<ChatMessage>, String> {
     let conn = db::lock(&state)?;
     chat::search_messages(&conn, conversation_id, &query, limit).map_err(|e| e.to_string())
+}
+
+/// 收起主窗口（关闭弹窗选「收起」时调用）。
+/// Windows：隐藏后任务栏按钮消失，从托盘图标恢复；macOS：点 Dock 图标恢复。
+#[tauri::command]
+pub fn hide_main_window(app: AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+}
+
+/// 彻底退出应用（关闭弹窗选「退出」或托盘菜单「退出」时调用）。
+/// 走 app.exit 而非销毁窗口，避免 CloseRequested 再次被拦截。
+#[tauri::command]
+pub fn exit_app(app: AppHandle) {
+    app.exit(0);
 }
